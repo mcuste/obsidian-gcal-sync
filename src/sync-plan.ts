@@ -36,12 +36,25 @@ export function planReconciliation(
   };
 
   for (const [sourceKey, desired] of desiredByKey) {
-    if (affectedSourceKeys && !affectedSourceKeys.has(sourceKey)) continue;
-    const matching = remoteByKey.get(sourceKey) ?? [];
+    if (
+      affectedSourceKeys &&
+      !affectedSourceKeys.has(sourceKey) &&
+      !affectedSourceKeys.has(desired.remoteSourceKey)
+    ) {
+      continue;
+    }
+
+    const currentEvents = remoteByKey.get(desired.remoteSourceKey) ?? [];
+    const legacyEvents =
+      desired.remoteSourceKey === sourceKey ? [] : (remoteByKey.get(sourceKey) ?? []);
+    const matching = [...currentEvents, ...legacyEvents];
     const current = matching[0];
     if (!current) {
       plan.creates.push(desired);
-    } else if (!eventsEqual(current, desired)) {
+    } else if (
+      remoteSourceKey(current) !== desired.remoteSourceKey ||
+      !eventsEqual(current, desired)
+    ) {
       plan.updates.push({ eventId: requireEventId(current), event: desired });
     } else {
       plan.unchanged += 1;
@@ -51,10 +64,11 @@ export function planReconciliation(
       plan.deletes.push(requireEventId(duplicate));
     }
     remoteByKey.delete(sourceKey);
+    remoteByKey.delete(desired.remoteSourceKey);
   }
 
-  for (const [sourceKey, staleEvents] of remoteByKey) {
-    if (affectedSourceKeys && !affectedSourceKeys.has(sourceKey)) continue;
+  for (const [remoteKey, staleEvents] of remoteByKey) {
+    if (affectedSourceKeys && !affectedSourceKeys.has(remoteKey)) continue;
     for (const stale of staleEvents) plan.deletes.push(requireEventId(stale));
   }
   return plan;
@@ -70,6 +84,10 @@ function groupRemoteEvents(events: GoogleEvent[]): Map<string, GoogleEvent[]> {
     grouped.set(sourceKey, matching);
   }
   return grouped;
+}
+
+function remoteSourceKey(event: GoogleEvent): string | undefined {
+  return event.extendedProperties?.private?.obsidianSourceKey;
 }
 
 function eventsEqual(remote: GoogleEvent, desired: VaultCalendarEvent): boolean {

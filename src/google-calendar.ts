@@ -5,6 +5,14 @@ import { planReconciliation } from "./sync-plan";
 
 const CALENDAR_API = "https://www.googleapis.com/calendar/v3";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const REVOCATION_ENDPOINT = "https://oauth2.googleapis.com/revoke";
+
+/** A plan touching at least this many events is reviewed by the user before it runs. */
+export const RECONCILIATION_APPROVAL_THRESHOLD = 25;
+/** A plan deleting at least this many events is reviewed by the user before it runs. */
+export const RECONCILIATION_DELETE_APPROVAL_THRESHOLD = 5;
+/** Default ceiling on how many events one sync may create, update, and delete. */
+export const DEFAULT_MAX_CHANGES_PER_SYNC = 200;
 
 export interface GoogleCredentials {
   clientId: string;
@@ -34,6 +42,27 @@ export interface SyncStats {
   updated: number;
   deleted: number;
   unchanged: number;
+  /** Deletes that were planned but skipped because part of the vault could not be read. */
+  deferredDeletes: number;
+  /** Set when the plan was large or destructive and nobody approved it, so nothing ran. */
+  pendingApproval?: ReconciliationSummary;
+}
+
+export interface ReconciliationSummary {
+  creates: number;
+  updates: number;
+  deletes: number;
+  total: number;
+}
+
+export interface ReconciliationOptions {
+  affectedSourceKeys?: ReadonlySet<string>;
+  /** Set to false while any note is unreadable, so unmatched remote events survive. */
+  allowDeletes?: boolean;
+  /** Refuse to run a plan larger than this. Defaults to DEFAULT_MAX_CHANGES_PER_SYNC. */
+  maxChanges?: number;
+  /** Asks the user to confirm a large or destructive plan. Omit for background syncs. */
+  approvePlan?(summary: ReconciliationSummary): Promise<boolean>;
 }
 
 export interface GoogleCalendarInfo {
@@ -45,7 +74,7 @@ export interface GoogleCalendarInfo {
 export interface GoogleCalendarGateway {
   reconcile(
     desiredEvents: Iterable<VaultCalendarEvent>,
-    affectedSourceKeys?: ReadonlySet<string>,
+    options?: ReconciliationOptions,
   ): Promise<SyncStats>;
   listWritableCalendars(): Promise<GoogleCalendarInfo[]>;
   createCalendar(summary: string): Promise<GoogleCalendarInfo>;
@@ -100,11 +129,31 @@ export class GoogleCalendarClient implements GoogleCalendarGateway {
 
   async reconcile(
     desiredEvents: Iterable<VaultCalendarEvent>,
-    affectedSourceKeys?: ReadonlySet<string>,
+    options: ReconciliationOptions = {},
   ): Promise<SyncStats> {
     const accessToken = await refreshAccessToken(this.credentials, this.transport);
     const remoteEvents = await this.listManagedEvents(accessToken);
-    const plan = planReconciliation(desiredEvents, remoteEvents, affectedSourceKeys);
+    const plan = planReconciliation(desiredEvents, remoteEvents, options.affectedSourceKeys);
+    const deferredDeletes = options.allowDeletes === false ? plan.deletes.length : 0;
+    if (options.allowDeletes === false) plan.deletes = [];
+
+    const summary = reconciliationSummary(plan);
+    const maxChanges = options.maxChanges ?? DEFAULT_MAX_CHANGES_PER_SYNC;
+    if (summary.total > maxChanges) {
+      throw new Error(
+        `Google Calendar sync stopped because ${summary.total} changes exceed the per-sync limit of ${maxChanges}. Review the notes that declare these events, then raise the limit in the plugin settings if the changes are expected.`,
+      );
+    }
+    if (requiresApproval(summary) && !(await options.approvePlan?.(summary))) {
+      return {
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        unchanged: plan.unchanged,
+        deferredDeletes,
+        pendingApproval: summary,
+      };
+    }
 
     for (const event of plan.creates) await this.createEvent(accessToken, event);
     for (const update of plan.updates) {
@@ -117,6 +166,7 @@ export class GoogleCalendarClient implements GoogleCalendarGateway {
       updated: plan.updates.length,
       deleted: plan.deletes.length,
       unchanged: plan.unchanged,
+      deferredDeletes,
     };
   }
 
@@ -181,7 +231,6 @@ export class GoogleCalendarClient implements GoogleCalendarGateway {
         showDeleted: "false",
         singleEvents: "false",
       });
-      query.append("privateExtendedProperty", "obsidianGcal=1");
       query.append("privateExtendedProperty", `obsidianVaultId=${this.vaultId}`);
       if (pageToken) query.set("pageToken", pageToken);
 
@@ -190,7 +239,11 @@ export class GoogleCalendarClient implements GoogleCalendarGateway {
         "GET",
         `/calendars/${encodeURIComponent(this.calendarId)}/events?${query.toString()}`,
       );
-      events.push(...(response.items ?? []).filter((event) => event.status !== "cancelled"));
+      events.push(
+        ...(response.items ?? []).filter(
+          (event) => event.status !== "cancelled" && isManagedEventForVault(event, this.vaultId),
+        ),
+      );
       pageToken = response.nextPageToken;
     } while (pageToken);
     return events;
@@ -242,7 +295,7 @@ export class GoogleCalendarClient implements GoogleCalendarGateway {
         private: {
           obsidianGcal: "1",
           obsidianVaultId: this.vaultId,
-          obsidianSourceKey: event.sourceKey,
+          obsidianSourceKey: event.remoteSourceKey,
         },
       },
     };
@@ -306,6 +359,22 @@ export async function exchangeAuthorizationCode(
   return token.refresh_token;
 }
 
+export async function revokeGoogleAuthorization(
+  refreshToken: string,
+  transport: GoogleTransport = requestUrl,
+): Promise<void> {
+  const response = await transport({
+    url: REVOCATION_ENDPOINT,
+    method: "POST",
+    contentType: "application/x-www-form-urlencoded",
+    body: new URLSearchParams({ token: refreshToken }).toString(),
+    throw: false,
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw apiError("Google OAuth revocation failed", response.status, response.text);
+  }
+}
+
 async function refreshAccessToken(
   credentials: GoogleCredentials,
   transport: GoogleTransport,
@@ -329,6 +398,33 @@ async function refreshAccessToken(
   const token = response.json as { access_token?: string };
   if (!token.access_token) throw new Error("Google OAuth response did not include an access token");
   return token.access_token;
+}
+
+function reconciliationSummary(plan: {
+  creates: unknown[];
+  updates: unknown[];
+  deletes: unknown[];
+}): ReconciliationSummary {
+  const creates = plan.creates.length;
+  const updates = plan.updates.length;
+  const deletes = plan.deletes.length;
+  return { creates, updates, deletes, total: creates + updates + deletes };
+}
+
+function requiresApproval(summary: ReconciliationSummary): boolean {
+  return (
+    summary.deletes >= RECONCILIATION_DELETE_APPROVAL_THRESHOLD ||
+    summary.total >= RECONCILIATION_APPROVAL_THRESHOLD
+  );
+}
+
+/**
+ * Google treats repeated privateExtendedProperty filters as OR, so the listing query alone can
+ * return events belonging to other vaults. Require both markers here before anything is planned.
+ */
+function isManagedEventForVault(event: GoogleEvent, vaultId: string): boolean {
+  const properties = event.extendedProperties?.private;
+  return properties?.obsidianGcal === "1" && properties.obsidianVaultId === vaultId;
 }
 
 function apiError(prefix: string, status: number, body: string): Error {

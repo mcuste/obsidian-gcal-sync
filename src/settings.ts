@@ -6,9 +6,15 @@ import {
   SecretComponent,
   Setting,
 } from "obsidian";
-import type { GoogleCalendarInfo } from "./google-calendar";
+import {
+  DEFAULT_MAX_CHANGES_PER_SYNC,
+  type GoogleCalendarInfo,
+  revokeGoogleAuthorization,
+} from "./google-calendar";
 import { authorizeGoogle, GOOGLE_AUTHORIZATION_VERSION } from "./google-oauth";
 import type GoogleCalendarSyncPlugin from "./main";
+
+const GOOGLE_PERMISSIONS_URL = "https://myaccount.google.com/permissions";
 
 export interface GoogleCalendarSyncSettings {
   calendarId: string;
@@ -19,6 +25,10 @@ export interface GoogleCalendarSyncSettings {
   syncIntervalMinutes: number;
   timeZone: string;
   vaultId: string;
+  /** Folders whose notes may declare events. Empty means the whole vault. */
+  syncFolders: string[];
+  /** Ceiling on how many events one sync may create, update, and delete. */
+  maxChangesPerSync: number;
 }
 
 export function defaultSettings(vaultId: string): GoogleCalendarSyncSettings {
@@ -31,7 +41,18 @@ export function defaultSettings(vaultId: string): GoogleCalendarSyncSettings {
     syncIntervalMinutes: 15,
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     vaultId,
+    syncFolders: [],
+    maxChangesPerSync: DEFAULT_MAX_CHANGES_PER_SYNC,
   };
+}
+
+/** Normalizes one folder per line into vault-relative paths without surrounding slashes. */
+export function parseSyncFolders(value: string): string[] {
+  const folders = value
+    .split("\n")
+    .map((line) => line.trim().replace(/^\/+|\/+$/g, ""))
+    .filter((line) => line.length > 0);
+  return Array.from(new Set(folders));
 }
 
 export class GoogleCalendarSettingTab extends PluginSettingTab {
@@ -92,6 +113,33 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
           }),
       );
 
+    if (this.plugin.settings.refreshTokenSecret) {
+      new Setting(this.containerEl)
+        .setName("Disconnect Google")
+        .setDesc(
+          `Revokes the stored refresh token with Google and clears it from this vault. If you are removing the plugin, also delete its access at ${GOOGLE_PERMISSIONS_URL}.`,
+        )
+        .addButton((button) =>
+          button
+            .setButtonText("Disconnect and revoke")
+            .setWarning()
+            .onClick(async () => {
+              button.setDisabled(true).setButtonText("Revoking…");
+              try {
+                await this.disconnect();
+                new Notice("Google Calendar authorization revoked");
+              } catch (error) {
+                new Notice(
+                  `${errorMessage(error)}. The token was cleared from this vault; revoke it at ${GOOGLE_PERMISSIONS_URL}.`,
+                  10_000,
+                );
+              } finally {
+                this.display();
+              }
+            }),
+        );
+    }
+
     new Setting(this.containerEl).setName("Calendar sync").setHeading();
     this.displayCalendarSettings();
 
@@ -121,6 +169,37 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
       );
 
     new Setting(this.containerEl)
+      .setName("Synced folders")
+      .setDesc(
+        "One vault-relative folder per line. Only notes inside these folders may declare events. " +
+          "Leave empty to scan the whole vault. Use this when other people can write to the vault.",
+      )
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("Calendar\nProjects/Planning")
+          .setValue(this.plugin.settings.syncFolders.join("\n"))
+          .onChange(async (value) => {
+            this.plugin.settings.syncFolders = parseSyncFolders(value);
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(this.containerEl)
+      .setName("Change limit per sync")
+      .setDesc(
+        "Stops a sync that would create, update, or delete more events than this. Guards against " +
+          "a note that declares events in bulk.",
+      )
+      .addText((text) =>
+        text.setValue(String(this.plugin.settings.maxChangesPerSync)).onChange(async (value) => {
+          const limit = Number.parseInt(value, 10);
+          if (!Number.isInteger(limit) || limit < 1) return;
+          this.plugin.settings.maxChangesPerSync = limit;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(this.containerEl)
       .setName("Sync now")
       .setDesc("Scans every Markdown note and reconciles all managed Google Calendar events.")
       .addButton((button) =>
@@ -141,6 +220,29 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
         "#gcal-repeat:monday-thursday, or an RRULE. Add #gcal-id:stable-name to keep " +
         "an inline event stable when lines move. Timed values require Z or a UTC offset.",
     );
+
+    new Setting(this.containerEl).setName("Trust model").setHeading();
+    new Setting(this.containerEl).setDesc(
+      "Any note in a synced folder can create, change, or delete events on the selected calendar, " +
+        "using your Google authorization. Treat write access to those folders as write access to " +
+        "the calendar. If other people or automations can write to this vault, restrict Synced " +
+        "folders to notes you control. Note and folder names are hashed before they reach Google, " +
+        "but event titles are uploaded as written.",
+    );
+  }
+
+  private async disconnect(): Promise<void> {
+    const secretId = this.plugin.settings.refreshTokenSecret;
+    const refreshToken = secretId ? this.app.secretStorage.getSecret(secretId) : null;
+
+    // Clear the local token first so a failed revocation still leaves the vault disconnected.
+    this.plugin.settings.refreshTokenSecret = "";
+    this.plugin.settings.googleAuthorizationVersion = 0;
+    await this.plugin.saveSettings();
+    if (secretId) this.app.secretStorage.setSecret(secretId, "");
+
+    if (!refreshToken) return;
+    await revokeGoogleAuthorization(refreshToken);
   }
 
   private displayCalendarSettings(): void {

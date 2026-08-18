@@ -70,6 +70,14 @@ export class PluginSettingTab {
   display(): void {}
 }
 
+export class Modal {
+  constructor(readonly app: App) {}
+
+  open(): void {}
+
+  close(): void {}
+}
+
 export class SecretComponent {}
 
 export class Setting {}

@@ -7,12 +7,15 @@ import {
   type PluginManifest,
   TFile,
 } from "obsidian";
+import { confirmReconciliation } from "./confirm-modal";
 import { type ParseIssue, parseVaultEvents, type VaultCalendarEvent } from "./event-parser";
 import {
+  DEFAULT_MAX_CHANGES_PER_SYNC,
   GoogleCalendarClient,
   type GoogleCalendarGateway,
   type GoogleCalendarInfo,
   type GoogleCredentials,
+  type ReconciliationSummary,
   type SyncStats,
 } from "./google-calendar";
 import {
@@ -22,6 +25,20 @@ import {
 } from "./settings";
 
 const CHANGE_DEBOUNCE_MS = 1_000;
+const MAX_REPORTED_ISSUES = 5;
+
+/**
+ * A snapshot of the vault's event declarations.
+ *
+ * A note that fails to parse keeps its last valid events so one broken declaration cannot strand
+ * every other note. A note that has never parsed leaves its events unknown, which suppresses
+ * deletes for that sync.
+ */
+interface VaultScan {
+  eventsByPath: Map<string, VaultCalendarEvent[]>;
+  issues: ParseIssue[];
+  unknownPaths: Set<string>;
+}
 
 export interface PluginTimers {
   setTimeout(callback: () => void, milliseconds: number): number;
@@ -37,6 +54,7 @@ export interface GoogleCalendarSyncPluginDependencies {
     vaultId: string,
   ): GoogleCalendarGateway;
   timers?: PluginTimers;
+  confirmPlan?(summary: ReconciliationSummary): Promise<boolean>;
 }
 
 const WINDOW_TIMERS: PluginTimers = {
@@ -54,10 +72,12 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
   private changeTimer: number | undefined;
   private periodicTimer: number | undefined;
   private syncTail: Promise<void> = Promise.resolve();
+  private lastPendingApproval = "";
   private readonly createCalendarGateway: NonNullable<
     GoogleCalendarSyncPluginDependencies["createCalendarGateway"]
   >;
   private readonly timers: PluginTimers;
+  private readonly confirmPlan: NonNullable<GoogleCalendarSyncPluginDependencies["confirmPlan"]>;
 
   constructor(
     app: App,
@@ -70,6 +90,8 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
       ((credentials, calendarId, vaultId) =>
         new GoogleCalendarClient(credentials, calendarId, vaultId));
     this.timers = dependencies.timers ?? WINDOW_TIMERS;
+    this.confirmPlan =
+      dependencies.confirmPlan ?? ((summary) => confirmReconciliation(this.app, summary));
   }
 
   override async onload(): Promise<void> {
@@ -124,20 +146,27 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
     this.periodicTimer = this.timers.setInterval(() => void this.syncNow(false), milliseconds);
   }
 
-  async syncNow(showNotice: boolean): Promise<void> {
+  /**
+   * Reconciles the whole vault. Interactive syncs may prompt the user to approve a large or
+   * destructive plan; background syncs report it and leave the calendar untouched.
+   */
+  async syncNow(interactive: boolean): Promise<void> {
     return this.serialize(async () => {
       try {
-        const events = await this.scanVault();
-        this.eventsByPath = events;
+        const scan = await this.scanVault();
+        this.eventsByPath = scan.eventsByPath;
+        this.reportIssues(scan.issues);
         if (!this.isConfigured()) {
-          if (showNotice) new Notice("Configure and authorize Google Calendar Sync first");
+          if (interactive) new Notice("Configure and authorize Google Calendar Sync first");
           return;
         }
 
-        const stats = await this.createClient().reconcile(flattenEvents(events));
-        if (showNotice || changedEventCount(stats) > 0) {
-          new Notice(formatStats(stats));
-        }
+        const stats = await this.createClient().reconcile(flattenEvents(scan.eventsByPath), {
+          allowDeletes: scan.unknownPaths.size === 0,
+          maxChanges: this.settings.maxChangesPerSync,
+          ...(interactive ? { approvePlan: this.confirmPlan } : {}),
+        });
+        this.reportStats(stats, interactive);
       } catch (error) {
         new Notice(errorMessage(error), 10_000);
       }
@@ -147,9 +176,15 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
   private async loadSettings(): Promise<void> {
     const stored = (await this.loadData()) as Partial<GoogleCalendarSyncSettings> | null;
     const vaultId = stored?.vaultId || randomUUID();
-    this.settings = Object.assign(defaultSettings(vaultId), stored ?? {}, {
-      vaultId,
-    });
+    const defaults = defaultSettings(vaultId);
+    const settings = Object.assign(defaults, stored ?? {}, { vaultId });
+    settings.syncFolders = Array.isArray(settings.syncFolders)
+      ? settings.syncFolders.filter((folder) => typeof folder === "string" && folder.length > 0)
+      : [];
+    if (!Number.isInteger(settings.maxChangesPerSync) || settings.maxChangesPerSync < 1) {
+      settings.maxChangesPerSync = DEFAULT_MAX_CHANGES_PER_SYNC;
+    }
+    this.settings = settings;
   }
 
   private schedulePath(path: string): void {
@@ -165,52 +200,72 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
     const paths = new Set(this.pendingPaths);
     this.pendingPaths.clear();
     await this.serialize(async () => {
-      const affectedKeys = new Set<string>();
-      const nextEventsByPath = new Map(this.eventsByPath);
-
       try {
+        const scan: VaultScan = {
+          eventsByPath: new Map(this.eventsByPath),
+          issues: [],
+          unknownPaths: new Set(),
+        };
+        const affectedKeys = new Set<string>();
+
         for (const path of paths) {
-          for (const oldEvent of nextEventsByPath.get(path) ?? []) {
-            affectedKeys.add(oldEvent.sourceKey);
+          for (const oldEvent of scan.eventsByPath.get(path) ?? []) {
+            addAffectedKeys(affectedKeys, oldEvent);
           }
+          scan.eventsByPath.delete(path);
 
           const file = this.app.vault.getAbstractFileByPath(path);
-          if (!(file instanceof TFile) || file.extension !== "md") {
-            nextEventsByPath.delete(path);
+          if (!(file instanceof TFile) || file.extension !== "md" || !this.isSyncedPath(path)) {
             continue;
           }
 
-          const parsed = await this.parseFile(file, this.app.metadataCache.getFileCache(file));
-          assertNoIssues(parsed.issues);
-          nextEventsByPath.set(path, parsed.events);
-          for (const event of parsed.events) affectedKeys.add(event.sourceKey);
+          await this.collectFile(scan, file);
+          for (const event of scan.eventsByPath.get(path) ?? []) {
+            addAffectedKeys(affectedKeys, event);
+          }
         }
-        assertUniqueSourceKeys(nextEventsByPath);
-        this.eventsByPath = nextEventsByPath;
+        dropDuplicateSourceKeys(scan);
+        this.eventsByPath = scan.eventsByPath;
+        this.reportIssues(scan.issues);
 
         if (!this.isConfigured() || affectedKeys.size === 0) return;
-        const stats = await this.createClient().reconcile(
-          flattenEvents(nextEventsByPath),
-          affectedKeys,
-        );
-        if (changedEventCount(stats) > 0) new Notice(formatStats(stats));
+        const stats = await this.createClient().reconcile(flattenEvents(scan.eventsByPath), {
+          affectedSourceKeys: affectedKeys,
+          allowDeletes: scan.unknownPaths.size === 0,
+          maxChanges: this.settings.maxChangesPerSync,
+        });
+        this.reportStats(stats, false);
       } catch (error) {
         new Notice(errorMessage(error), 10_000);
       }
     });
   }
 
-  private async scanVault(): Promise<Map<string, VaultCalendarEvent[]>> {
-    const eventsByPath = new Map<string, VaultCalendarEvent[]>();
-    const issues: ParseIssue[] = [];
+  private async scanVault(): Promise<VaultScan> {
+    const scan: VaultScan = { eventsByPath: new Map(), issues: [], unknownPaths: new Set() };
     for (const file of this.app.vault.getMarkdownFiles()) {
-      const parsed = await this.parseFile(file, this.app.metadataCache.getFileCache(file));
-      eventsByPath.set(file.path, parsed.events);
-      issues.push(...parsed.issues);
+      if (!this.isSyncedPath(file.path)) continue;
+      await this.collectFile(scan, file);
     }
-    assertNoIssues(issues);
-    assertUniqueSourceKeys(eventsByPath);
-    return eventsByPath;
+    dropDuplicateSourceKeys(scan);
+    return scan;
+  }
+
+  /**
+   * Records one note's events. A note that fails to parse falls back to its last valid events, or
+   * is marked unknown when it has never parsed, so its remote events are not treated as stale.
+   */
+  private async collectFile(scan: VaultScan, file: TFile): Promise<void> {
+    const parsed = await this.parseFile(file, this.app.metadataCache.getFileCache(file));
+    if (parsed.issues.length === 0) {
+      scan.eventsByPath.set(file.path, parsed.events);
+      return;
+    }
+
+    scan.issues.push(...parsed.issues);
+    const retained = this.eventsByPath.get(file.path);
+    if (retained) scan.eventsByPath.set(file.path, retained);
+    else scan.unknownPaths.add(file.path);
   }
 
   private async parseFile(
@@ -228,7 +283,40 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
       content,
       frontmatter,
       timeZone: this.settings.timeZone,
+      vaultId: this.settings.vaultId,
     });
+  }
+
+  /** True when the note may declare events, according to the configured folder allowlist. */
+  private isSyncedPath(path: string): boolean {
+    const folders = this.settings.syncFolders;
+    if (folders.length === 0) return true;
+    return folders.some((folder) => path === folder || path.startsWith(`${folder}/`));
+  }
+
+  private reportIssues(issues: ParseIssue[]): void {
+    if (issues.length === 0) return;
+    new Notice(formatIssues(issues), 10_000);
+  }
+
+  private reportStats(stats: SyncStats, interactive: boolean): void {
+    if (stats.pendingApproval) {
+      const signature = formatSummary(stats.pendingApproval);
+      if (interactive) {
+        new Notice("Google Calendar sync cancelled; no events were changed");
+        return;
+      }
+      if (signature === this.lastPendingApproval) return;
+      this.lastPendingApproval = signature;
+      new Notice(
+        `Google Calendar sync needs review (${signature}). Run "Sync Google Calendar now" to approve it.`,
+        10_000,
+      );
+      return;
+    }
+
+    this.lastPendingApproval = "";
+    if (interactive || changedEventCount(stats) > 0) new Notice(formatStats(stats));
   }
 
   async listWritableCalendars(): Promise<GoogleCalendarInfo[]> {
@@ -276,34 +364,56 @@ function flattenEvents(
   return Array.from(eventsByPath.values()).flat();
 }
 
-function assertNoIssues(issues: ParseIssue[]): void {
-  if (issues.length === 0) return;
-  const details = issues
-    .slice(0, 5)
-    .map((issue) => `${issue.sourcePath} (${issue.location}): ${issue.message}`)
-    .join("\n");
-  const remaining = issues.length > 5 ? `\n…and ${issues.length - 5} more` : "";
-  throw new Error(
-    `Calendar sync stopped because event declarations are invalid:\n${details}${remaining}`,
-  );
+function addAffectedKeys(keys: Set<string>, event: VaultCalendarEvent): void {
+  keys.add(event.sourceKey);
+  keys.add(event.remoteSourceKey);
 }
 
-function assertUniqueSourceKeys(eventsByPath: ReadonlyMap<string, VaultCalendarEvent[]>): void {
+/** Drops events whose key another note already claimed, so one note cannot hijack another's event. */
+function dropDuplicateSourceKeys(scan: VaultScan): void {
   const seen = new Set<string>();
-  for (const event of flattenEvents(eventsByPath)) {
-    if (seen.has(event.sourceKey)) {
-      throw new Error(`Calendar sync stopped because ${event.sourceKey} is duplicated`);
-    }
-    seen.add(event.sourceKey);
+  for (const [path, events] of scan.eventsByPath) {
+    const unique = events.filter((event) => {
+      if (!seen.has(event.sourceKey)) {
+        seen.add(event.sourceKey);
+        return true;
+      }
+      scan.issues.push({
+        sourcePath: path,
+        location: event.sourceKey,
+        message: "Another note already declares this event key; this declaration was skipped",
+      });
+      scan.unknownPaths.add(path);
+      return false;
+    });
+    if (unique.length !== events.length) scan.eventsByPath.set(path, unique);
   }
+}
+
+function formatIssues(issues: ParseIssue[]): string {
+  const details = issues
+    .slice(0, MAX_REPORTED_ISSUES)
+    .map((issue) => `${issue.sourcePath} (${issue.location}): ${issue.message}`)
+    .join("\n");
+  const remaining =
+    issues.length > MAX_REPORTED_ISSUES ? `\n…and ${issues.length - MAX_REPORTED_ISSUES} more` : "";
+  return `Some event declarations were skipped; their notes keep their last synced events:\n${details}${remaining}`;
 }
 
 function changedEventCount(stats: SyncStats): number {
   return stats.created + stats.updated + stats.deleted;
 }
 
+function formatSummary(summary: ReconciliationSummary): string {
+  return `${summary.creates} to create, ${summary.updates} to update, ${summary.deletes} to delete`;
+}
+
 function formatStats(stats: SyncStats): string {
-  return `Google Calendar synced: ${stats.created} created, ${stats.updated} updated, ${stats.deleted} deleted, ${stats.unchanged} unchanged`;
+  const deferred =
+    stats.deferredDeletes > 0
+      ? `, ${stats.deferredDeletes} deletion(s) held back until every note parses`
+      : "";
+  return `Google Calendar synced: ${stats.created} created, ${stats.updated} updated, ${stats.deleted} deleted, ${stats.unchanged} unchanged${deferred}`;
 }
 
 function errorMessage(error: unknown): string {

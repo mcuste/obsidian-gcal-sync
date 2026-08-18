@@ -2,12 +2,26 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { App, PluginManifest } from "obsidian";
 import { TFile } from "obsidian";
-import type { VaultCalendarEvent } from "../src/event-parser";
-import type { GoogleCalendarGateway, GoogleCalendarInfo, SyncStats } from "../src/google-calendar";
+import { makeRemoteSourceKey, type VaultCalendarEvent } from "../src/event-parser";
+import type {
+  GoogleCalendarGateway,
+  GoogleCalendarInfo,
+  ReconciliationOptions,
+  ReconciliationSummary,
+  SyncStats,
+} from "../src/google-calendar";
+import { DEFAULT_MAX_CHANGES_PER_SYNC } from "../src/google-calendar";
 import GoogleCalendarSyncPlugin, { type PluginTimers } from "../src/main";
+import type { GoogleCalendarSyncSettings } from "../src/settings";
 import { type GoogleEvent, planReconciliation } from "../src/sync-plan";
 
 const RuntimeTFile = TFile as unknown as new (path: string) => TFile;
+const VAULT_ID = "vault-id";
+
+/** The key the plugin stores on Google for a note-local source key. */
+function remoteKey(sourceKey: string): string {
+  return makeRemoteSourceKey(VAULT_ID, sourceKey);
+}
 const MANIFEST = {
   id: "obsidian-gcloud",
   name: "Google Calendar Sync",
@@ -127,11 +141,16 @@ class InMemoryGateway implements GoogleCalendarGateway {
     this.events = [...events];
   }
 
+  readonly options: ReconciliationOptions[] = [];
+
   async reconcile(
     desiredEvents: Iterable<VaultCalendarEvent>,
-    affectedSourceKeys?: ReadonlySet<string>,
+    options: ReconciliationOptions = {},
   ): Promise<SyncStats> {
-    const plan = planReconciliation(desiredEvents, this.events, affectedSourceKeys);
+    this.options.push(options);
+    const plan = planReconciliation(desiredEvents, this.events, options.affectedSourceKeys);
+    const deferredDeletes = options.allowDeletes === false ? plan.deletes.length : 0;
+    if (options.allowDeletes === false) plan.deletes = [];
     const deletedIds = new Set(plan.deletes);
     this.events = this.events.filter((event) => !event.id || !deletedIds.has(event.id));
 
@@ -154,6 +173,7 @@ class InMemoryGateway implements GoogleCalendarGateway {
       updated: plan.updates.length,
       deleted: plan.deletes.length,
       unchanged: plan.unchanged,
+      deferredDeletes,
     };
   }
 
@@ -202,12 +222,12 @@ class BlockingGateway implements GoogleCalendarGateway {
 
   async reconcile(
     _desiredEvents: Iterable<VaultCalendarEvent>,
-    affectedSourceKeys?: ReadonlySet<string>,
+    options: ReconciliationOptions = {},
   ): Promise<SyncStats> {
     this.starts += 1;
     this.active += 1;
     this.maxActive = Math.max(this.maxActive, this.active);
-    this.kinds.push(affectedSourceKeys ? "incremental" : "full");
+    this.kinds.push(options.affectedSourceKeys ? "incremental" : "full");
     this.resolveWaiters(this.startWaiters, this.starts);
 
     const gate = Promise.withResolvers<void>();
@@ -217,7 +237,7 @@ class BlockingGateway implements GoogleCalendarGateway {
     this.active -= 1;
     this.completions += 1;
     this.resolveWaiters(this.completionWaiters, this.completions);
-    return { created: 0, updated: 0, deleted: 0, unchanged: 0 };
+    return { created: 0, updated: 0, deleted: 0, unchanged: 0, deferredDeletes: 0 };
   }
 
   async listWritableCalendars(): Promise<GoogleCalendarInfo[]> {
@@ -270,7 +290,7 @@ function managed(id: string, sourceKey: string, summary: string): GoogleEvent {
     summary,
     start: { date: "2026-08-18" },
     end: { date: "2026-08-19" },
-    extendedProperties: { private: { obsidianSourceKey: sourceKey } },
+    extendedProperties: { private: { obsidianSourceKey: remoteKey(sourceKey) } },
   };
 }
 
@@ -281,11 +301,50 @@ function toRemote(event: VaultCalendarEvent, id: string): GoogleEvent {
     start: event.start,
     end: event.end,
     recurrence: event.recurrence,
-    extendedProperties: { private: { obsidianSourceKey: event.sourceKey } },
+    extendedProperties: { private: { obsidianSourceKey: event.remoteSourceKey } },
   };
 }
 
-function setup(gateway: GoogleCalendarGateway): {
+/** Maps the gateway's hashed keys back to the note-local keys the tests declare. */
+function sourceKeys(
+  gateway: InMemoryGateway,
+): Array<[string, string | undefined, string | undefined]> {
+  return gateway
+    .state()
+    .map(
+      ([remote, summary, id]) =>
+        [KNOWN_SOURCE_KEYS.get(remote) ?? remote, summary, id] as [
+          string,
+          string | undefined,
+          string | undefined,
+        ],
+    )
+    .sort(([left], [right]) => left.localeCompare(right));
+}
+
+const KNOWN_SOURCE_KEYS = new Map(
+  [
+    "New.md::new",
+    "Update.md::update",
+    "Removed.md::stale",
+    "Other.md::event",
+    "Old.md::event",
+    "New.md::event",
+    "Delete.md::event",
+    "Valid.md::new",
+    "Notes.md::standup",
+    "Broken.md::fixed",
+    "Calendar/Team.md::standup",
+    "Shared/Injected.md::injected",
+    "Shared/Later.md::later",
+  ].map((sourceKey) => [remoteKey(sourceKey), sourceKey] as const),
+);
+
+function setup(
+  gateway: GoogleCalendarGateway,
+  storedSettings: Partial<GoogleCalendarSyncSettings> = {},
+  confirmPlan?: (summary: ReconciliationSummary) => Promise<boolean>,
+): {
   plugin: GoogleCalendarSyncPlugin;
   vault: TestVault;
   workspace: TestWorkspace;
@@ -311,6 +370,7 @@ function setup(gateway: GoogleCalendarGateway): {
   const plugin = new GoogleCalendarSyncPlugin(app, MANIFEST, {
     createCalendarGateway: () => gateway,
     timers,
+    ...(confirmPlan ? { confirmPlan } : {}),
   });
   plugin.loadData = async () => ({
     calendarId: "calendar-id",
@@ -318,7 +378,8 @@ function setup(gateway: GoogleCalendarGateway): {
     refreshTokenSecret: "refresh-token-secret",
     syncIntervalMinutes: 15,
     timeZone: "UTC",
-    vaultId: "vault-id",
+    vaultId: VAULT_ID,
+    ...storedSettings,
   });
   return { plugin, vault, workspace, timers };
 }
@@ -336,7 +397,7 @@ test("full lifecycle scan creates, updates, and deletes managed events", async (
   workspace.ready();
   await gateway.waitForCompleted(1);
 
-  assert.deepEqual(gateway.state(), [
+  assert.deepEqual(sourceKeys(gateway), [
     ["New.md::new", "New", "created-1"],
     ["Update.md::update", "Updated", "update-id"],
   ]);
@@ -358,7 +419,7 @@ test("deleting a note removes cached source keys without touching unrelated even
   timers.runTimeouts();
   await gateway.waitForCompleted(2);
 
-  assert.deepEqual(gateway.state(), [["Other.md::event", "Other", "unrelated-id"]]);
+  assert.deepEqual(sourceKeys(gateway), [["Other.md::event", "Other", "unrelated-id"]]);
   plugin.onunload();
 });
 
@@ -377,15 +438,15 @@ test("renaming a note reconciles both its old and new paths", async () => {
   timers.runTimeouts();
   await gateway.waitForCompleted(2);
 
-  assert.deepEqual(gateway.state(), [
+  assert.deepEqual(sourceKeys(gateway), [
     ["New.md::event", "After", "created-2"],
     ["Other.md::event", "Other", "unrelated-id"],
   ]);
   plugin.onunload();
 });
 
-test("an invalid declaration prevents every remote mutation", async () => {
-  const gateway = new InMemoryGateway([managed("safe-id", "Remote.md::safe", "Safe")]);
+test("a note that has never parsed does not block others and suspends deletes", async () => {
+  const gateway = new InMemoryGateway([managed("stale-id", "Removed.md::stale", "Stale")]);
   const { plugin, vault } = setup(gateway);
   vault.set("Valid.md", "Would create #gcal:2026-08-18 #gcal-id:new");
   vault.set("Broken.md", "Broken #gcal:not-a-date");
@@ -393,7 +454,110 @@ test("an invalid declaration prevents every remote mutation", async () => {
   await plugin.onload();
   await plugin.syncNow(false);
 
-  assert.deepEqual(gateway.state(), [["Remote.md::safe", "Safe", "safe-id"]]);
+  assert.deepEqual(sourceKeys(gateway), [
+    ["Removed.md::stale", "Stale", "stale-id"],
+    ["Valid.md::new", "Would create", "created-1"],
+  ]);
+  assert.equal(gateway.options.at(-1)?.allowDeletes, false);
+  plugin.onunload();
+});
+
+test("a note that becomes invalid keeps the events it last synced", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault, workspace, timers } = setup(gateway);
+  const file = vault.set("Notes.md", "Standup #gcal:2026-08-18 #gcal-id:standup");
+
+  await plugin.onload();
+  workspace.ready();
+  await gateway.waitForCompleted(1);
+  assert.deepEqual(sourceKeys(gateway), [["Notes.md::standup", "Standup", "created-1"]]);
+
+  vault.set("Notes.md", "Standup #gcal:2026-08-18 #gcal-id:standup\nBroken #gcal:not-a-date");
+  vault.emit("create", file);
+  timers.runTimeouts();
+  await gateway.waitForCompleted(2);
+
+  assert.deepEqual(sourceKeys(gateway), [["Notes.md::standup", "Standup", "created-1"]]);
+  plugin.onunload();
+});
+
+test("full syncs resume deleting once every note parses again", async () => {
+  const gateway = new InMemoryGateway([managed("stale-id", "Removed.md::stale", "Stale")]);
+  const { plugin, vault } = setup(gateway);
+  vault.set("Broken.md", "Broken #gcal:not-a-date");
+
+  await plugin.onload();
+  await plugin.syncNow(false);
+  assert.deepEqual(sourceKeys(gateway), [["Removed.md::stale", "Stale", "stale-id"]]);
+
+  vault.set("Broken.md", "Fixed #gcal:2026-08-18 #gcal-id:fixed");
+  await plugin.syncNow(false);
+
+  assert.deepEqual(sourceKeys(gateway), [["Broken.md::fixed", "Fixed", "created-1"]]);
+  assert.equal(gateway.options.at(-1)?.allowDeletes, true);
+  plugin.onunload();
+});
+
+test("notes outside the synced folders never reach the calendar", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault, workspace, timers } = setup(gateway, { syncFolders: ["Calendar"] });
+  vault.set("Calendar/Team.md", "Standup #gcal:2026-08-18 #gcal-id:standup");
+  vault.set("Shared/Injected.md", "Injected #gcal:2026-08-18 #gcal-id:injected");
+
+  await plugin.onload();
+  workspace.ready();
+  await gateway.waitForCompleted(1);
+  assert.deepEqual(sourceKeys(gateway), [["Calendar/Team.md::standup", "Standup", "created-1"]]);
+
+  const outside = vault.set("Shared/Later.md", "Later #gcal:2026-08-19 #gcal-id:later");
+  vault.emit("create", outside);
+  timers.runTimeouts();
+
+  await plugin.syncNow(false);
+  assert.deepEqual(sourceKeys(gateway), [["Calendar/Team.md::standup", "Standup", "created-1"]]);
+  plugin.onunload();
+});
+
+test("only user-initiated syncs can approve a large or destructive plan", async () => {
+  const gateway = new InMemoryGateway();
+  const confirmPlan = async (): Promise<boolean> => true;
+  const { plugin, vault, workspace, timers } = setup(
+    gateway,
+    { maxChangesPerSync: 42 },
+    confirmPlan,
+  );
+  const file = vault.set("Notes.md", "Standup #gcal:2026-08-18 #gcal-id:standup");
+
+  await plugin.onload();
+  workspace.ready();
+  await gateway.waitForCompleted(1);
+  assert.equal(gateway.options.at(-1)?.approvePlan, undefined, "startup syncs cannot prompt");
+  assert.equal(gateway.options.at(-1)?.maxChanges, 42);
+
+  vault.set("Notes.md", "Renamed #gcal:2026-08-18 #gcal-id:standup");
+  vault.emit("create", file);
+  timers.runTimeouts();
+  await gateway.waitForCompleted(2);
+  assert.equal(gateway.options.at(-1)?.approvePlan, undefined, "file changes cannot prompt");
+
+  await plugin.syncNow(true);
+  assert.equal(gateway.options.at(-1)?.approvePlan, confirmPlan);
+  plugin.onunload();
+});
+
+test("a stored change limit that is not a positive integer falls back to the default", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault } = setup(gateway, {
+    maxChangesPerSync: 0,
+    syncFolders: undefined as unknown as string[],
+  });
+  vault.set("Notes.md", "Standup #gcal:2026-08-18 #gcal-id:standup");
+
+  await plugin.onload();
+  await plugin.syncNow(false);
+
+  assert.equal(gateway.options.at(-1)?.maxChanges, DEFAULT_MAX_CHANGES_PER_SYNC);
+  assert.deepEqual(sourceKeys(gateway), [["Notes.md::standup", "Standup", "created-1"]]);
   plugin.onunload();
 });
 

@@ -6,9 +6,15 @@ import {
   type GoogleHttpRequest,
   type GoogleHttpResponse,
   type GoogleTransport,
+  RECONCILIATION_APPROVAL_THRESHOLD,
+  RECONCILIATION_DELETE_APPROVAL_THRESHOLD,
+  type ReconciliationSummary,
+  revokeGoogleAuthorization,
 } from "../src/google-calendar";
 
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const REVOCATION_ENDPOINT = "https://oauth2.googleapis.com/revoke";
+const VAULT_ID = "vault/id";
 
 function response(json: unknown, status = 200, text = JSON.stringify(json)): GoogleHttpResponse {
   return { status, json, text };
@@ -30,12 +36,17 @@ function recordingTransport(
 function desired(sourceKey: string, summary: string, recurrence?: string[]): VaultCalendarEvent {
   return {
     sourceKey,
-    sourcePath: "Calendar.md",
+    remoteSourceKey: sourceKey,
     summary,
     start: { date: "2026-08-18" },
     end: { date: "2026-08-19" },
     recurrence,
   };
+}
+
+/** The private properties the plugin stamps on every event it owns in this vault. */
+function managedBy(sourceKey: string, vaultId = VAULT_ID): Record<string, string> {
+  return { obsidianGcal: "1", obsidianVaultId: vaultId, obsidianSourceKey: sourceKey };
 }
 
 function requestBody(request: GoogleHttpRequest): Record<string, unknown> {
@@ -51,7 +62,7 @@ function client(transport: GoogleTransport, calendarId = "calendar-id"): GoogleC
       refreshToken: "refresh-token",
     },
     calendarId,
-    "vault/id",
+    VAULT_ID,
     transport,
   );
 }
@@ -67,12 +78,12 @@ test("managed-event listing isolates the vault, exhausts pages, and encodes IDs"
             {
               id: "event/id",
               summary: "Stale one",
-              extendedProperties: { private: { obsidianSourceKey: "stale-one" } },
+              extendedProperties: { private: managedBy("stale-one") },
             },
             {
               id: "cancelled-id",
               status: "cancelled",
-              extendedProperties: { private: { obsidianSourceKey: "cancelled" } },
+              extendedProperties: { private: managedBy("cancelled") },
             },
           ],
           nextPageToken: "next page",
@@ -83,7 +94,7 @@ test("managed-event listing isolates the vault, exhausts pages, and encodes IDs"
           {
             id: "event two",
             summary: "Stale two",
-            extendedProperties: { private: { obsidianSourceKey: "stale-two" } },
+            extendedProperties: { private: managedBy("stale-two") },
           },
         ],
       });
@@ -94,7 +105,13 @@ test("managed-event listing isolates the vault, exhausts pages, and encodes IDs"
 
   const stats = await client(transport, "calendar/id").reconcile([]);
 
-  assert.deepEqual(stats, { created: 0, updated: 0, deleted: 2, unchanged: 0 });
+  assert.deepEqual(stats, {
+    created: 0,
+    updated: 0,
+    deleted: 2,
+    unchanged: 0,
+    deferredDeletes: 0,
+  });
   const tokenRequest = requests[0];
   assert.ok(tokenRequest);
   assert.equal(tokenRequest.url, TOKEN_ENDPOINT);
@@ -110,8 +127,8 @@ test("managed-event listing isolates the vault, exhausts pages, and encodes IDs"
   for (const request of listRequests) {
     const url = new URL(request.url);
     assert.equal(url.pathname, "/calendar/v3/calendars/calendar%2Fid/events");
+    // Google ORs repeated private-property filters, so only the vault marker may be queried.
     assert.deepEqual(url.searchParams.getAll("privateExtendedProperty"), [
-      "obsidianGcal=1",
       "obsidianVaultId=vault/id",
     ]);
     assert.equal(request.headers?.Authorization, "Bearer access-token");
@@ -139,7 +156,7 @@ test("create and patch bodies preserve source metadata and remove recurrence", a
             start: { date: "2026-08-18" },
             end: { date: "2026-08-19" },
             recurrence: ["RRULE:FREQ=WEEKLY"],
-            extendedProperties: { private: { obsidianSourceKey: "changed" } },
+            extendedProperties: { private: managedBy("changed") },
           },
         ],
       });
@@ -153,7 +170,13 @@ test("create and patch bodies preserve source metadata and remove recurrence", a
     desired("changed", "Changed"),
   ]);
 
-  assert.deepEqual(stats, { created: 1, updated: 1, deleted: 0, unchanged: 0 });
+  assert.deepEqual(stats, {
+    created: 1,
+    updated: 1,
+    deleted: 0,
+    unchanged: 0,
+    deferredDeletes: 0,
+  });
   const createRequest = requests.find(
     (request) => request.method === "POST" && request.url.includes("/calendar/v3/"),
   );
@@ -201,7 +224,7 @@ test("delete accepts gone events and rejects unexpected statuses", async () => {
           items: [
             {
               id: "stale-id",
-              extendedProperties: { private: { obsidianSourceKey: "stale" } },
+              extendedProperties: { private: managedBy("stale") },
             },
           ],
         });
@@ -219,7 +242,7 @@ test("delete accepts gone events and rejects unexpected statuses", async () => {
         items: [
           {
             id: "stale-id",
-            extendedProperties: { private: { obsidianSourceKey: "stale" } },
+            extendedProperties: { private: managedBy("stale") },
           },
         ],
       });
@@ -292,5 +315,185 @@ test("calendar creation trims names and rejects missing response IDs", async () 
   await assert.rejects(
     client(missingId.transport).createCalendar("Missing"),
     /did not return the created calendar ID/,
+  );
+});
+
+test("events marked for another vault are never planned against", async () => {
+  const { requests, transport } = recordingTransport((request) => {
+    if (request.url === TOKEN_ENDPOINT) return response({ access_token: "access-token" });
+    if (request.method === "GET") {
+      // Google ORs repeated privateExtendedProperty filters, so the listing can include events
+      // that only match the shared plugin marker.
+      return response({
+        items: [
+          {
+            id: "other-vault-event",
+            summary: "Someone else's event",
+            extendedProperties: { private: managedBy("their-key", "other-vault") },
+          },
+          {
+            id: "unmarked-event",
+            summary: "Missing the plugin marker",
+            extendedProperties: { private: { obsidianVaultId: VAULT_ID } },
+          },
+        ],
+      });
+    }
+    throw new Error(`Unexpected request: ${request.method} ${request.url}`);
+  });
+
+  const stats = await client(transport).reconcile([]);
+
+  assert.deepEqual(stats, {
+    created: 0,
+    updated: 0,
+    deleted: 0,
+    unchanged: 0,
+    deferredDeletes: 0,
+  });
+  assert.deepEqual(
+    requests.filter((request) => request.method !== "GET" && request.url !== TOKEN_ENDPOINT),
+    [],
+  );
+});
+
+function staleEvents(count: number): Array<Record<string, unknown>> {
+  return Array.from({ length: count }, (_unused, index) => ({
+    id: `stale-${index}`,
+    summary: `Stale ${index}`,
+    extendedProperties: { private: managedBy(`stale-${index}`) },
+  }));
+}
+
+function listingTransport(items: Array<Record<string, unknown>>) {
+  return recordingTransport((request) => {
+    if (request.url === TOKEN_ENDPOINT) return response({ access_token: "access-token" });
+    if (request.method === "GET") return response({ items });
+    if (request.method === "DELETE") return response({}, 204, "");
+    throw new Error(`Unexpected request: ${request.method} ${request.url}`);
+  });
+}
+
+test("a destructive plan waits for approval and runs only once approved", async () => {
+  const items = staleEvents(RECONCILIATION_DELETE_APPROVAL_THRESHOLD);
+
+  const unapproved = listingTransport(items);
+  const held = await client(unapproved.transport).reconcile([]);
+  assert.deepEqual(held.pendingApproval, {
+    creates: 0,
+    updates: 0,
+    deletes: RECONCILIATION_DELETE_APPROVAL_THRESHOLD,
+    total: RECONCILIATION_DELETE_APPROVAL_THRESHOLD,
+  });
+  assert.equal(held.deleted, 0);
+  assert.equal(unapproved.requests.filter((request) => request.method === "DELETE").length, 0);
+
+  const declined = listingTransport(items);
+  const refused = await client(declined.transport).reconcile([], {
+    approvePlan: async () => false,
+  });
+  assert.ok(refused.pendingApproval);
+  assert.equal(declined.requests.filter((request) => request.method === "DELETE").length, 0);
+
+  const approved = listingTransport(items);
+  const seen: ReconciliationSummary[] = [];
+  const applied = await client(approved.transport).reconcile([], {
+    approvePlan: async (summary) => {
+      seen.push(summary);
+      return true;
+    },
+  });
+  assert.equal(applied.pendingApproval, undefined);
+  assert.equal(applied.deleted, RECONCILIATION_DELETE_APPROVAL_THRESHOLD);
+  assert.deepEqual(seen, [
+    {
+      creates: 0,
+      updates: 0,
+      deletes: RECONCILIATION_DELETE_APPROVAL_THRESHOLD,
+      total: RECONCILIATION_DELETE_APPROVAL_THRESHOLD,
+    },
+  ]);
+});
+
+test("a large but non-destructive plan also waits for approval", async () => {
+  const { requests, transport } = listingTransport([]);
+  const events = Array.from({ length: RECONCILIATION_APPROVAL_THRESHOLD }, (_unused, index) =>
+    desired(`bulk-${index}`, `Bulk ${index}`),
+  );
+
+  const stats = await client(transport).reconcile(events);
+
+  assert.deepEqual(stats.pendingApproval, {
+    creates: RECONCILIATION_APPROVAL_THRESHOLD,
+    updates: 0,
+    deletes: 0,
+    total: RECONCILIATION_APPROVAL_THRESHOLD,
+  });
+  assert.equal(stats.created, 0);
+  const creates = requests.filter(
+    (request) => request.method === "POST" && request.url.includes("/calendar/v3/"),
+  );
+  assert.deepEqual(creates, []);
+});
+
+test("a small plan runs without asking for approval", async () => {
+  const { requests, transport } = listingTransport(staleEvents(1));
+  let asked = false;
+
+  const stats = await client(transport).reconcile([], {
+    approvePlan: async () => {
+      asked = true;
+      return true;
+    },
+  });
+
+  assert.equal(asked, false);
+  assert.equal(stats.deleted, 1);
+  assert.equal(requests.filter((request) => request.method === "DELETE").length, 1);
+});
+
+test("a plan past the change limit is refused even when it is approved", async () => {
+  const { requests, transport } = listingTransport(staleEvents(3));
+
+  await assert.rejects(
+    client(transport).reconcile([], { maxChanges: 2, approvePlan: async () => true }),
+    /3 changes exceed the per-sync limit of 2/,
+  );
+  assert.equal(requests.filter((request) => request.method === "DELETE").length, 0);
+});
+
+test("deletes are held back while part of the vault is unreadable", async () => {
+  const { requests, transport } = listingTransport(staleEvents(2));
+
+  const stats = await client(transport).reconcile([], { allowDeletes: false });
+
+  assert.deepEqual(stats, {
+    created: 0,
+    updated: 0,
+    deleted: 0,
+    unchanged: 0,
+    deferredDeletes: 2,
+  });
+  assert.equal(requests.filter((request) => request.method === "DELETE").length, 0);
+});
+
+test("revoking sends the refresh token to Google and surfaces failures", async () => {
+  const { requests, transport } = recordingTransport(() => response({}, 200, ""));
+  await revokeGoogleAuthorization("refresh-token", transport);
+
+  const revocation = requests[0];
+  assert.ok(revocation);
+  assert.equal(revocation.url, REVOCATION_ENDPOINT);
+  assert.equal(revocation.method, "POST");
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(String(revocation.body))), {
+    token: "refresh-token",
+  });
+
+  const failing = recordingTransport(() =>
+    response({ error: "invalid_token" }, 400, JSON.stringify({ error: "invalid_token" })),
+  );
+  await assert.rejects(
+    revokeGoogleAuthorization("refresh-token", failing.transport),
+    /revocation failed \(400\): invalid_token/,
   );
 });

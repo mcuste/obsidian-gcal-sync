@@ -3,10 +3,15 @@ import test from "node:test";
 import type { VaultCalendarEvent } from "../src/event-parser";
 import { type GoogleEvent, planReconciliation } from "../src/sync-plan";
 
+/** Mirrors the hashing the parser applies before a key is uploaded. */
+function remoteKey(sourceKey: string): string {
+  return `v1:${sourceKey}-hashed`;
+}
+
 function desired(sourceKey: string, summary: string): VaultCalendarEvent {
   return {
     sourceKey,
-    sourcePath: "Calendar.md",
+    remoteSourceKey: remoteKey(sourceKey),
     summary,
     start: { dateTime: "2026-08-18T09:00:00-04:00", timeZone: "America/New_York" },
     end: { dateTime: "2026-08-18T10:00:00-04:00", timeZone: "America/New_York" },
@@ -26,7 +31,7 @@ function remote(
     start: { dateTime: "2026-08-18T13:00:00Z" },
     end: { dateTime: "2026-08-18T14:00:00Z" },
     recurrence: ["RRULE:FREQ=WEEKLY"],
-    extendedProperties: { private: { obsidianSourceKey: sourceKey } },
+    extendedProperties: { private: { obsidianSourceKey: remoteKey(sourceKey) } },
     ...overrides,
   };
 }
@@ -116,6 +121,24 @@ test("fails safely when an actionable remote event has no ID", () => {
   assert.throws(
     () => planReconciliation([], [remote("", "stale", "Stale")]),
     /event without an ID/,
+  );
+});
+
+test("adopts an event still keyed by an unhashed source key and rewrites it", () => {
+  const plan = planReconciliation(
+    [desired("event", "Event")],
+    [
+      remote("legacy-id", "event", "Event", {
+        extendedProperties: { private: { obsidianSourceKey: "event" } },
+      }),
+    ],
+  );
+
+  assert.deepEqual(plan.creates, []);
+  assert.deepEqual(plan.deletes, []);
+  assert.deepEqual(
+    plan.updates.map((update) => update.eventId),
+    ["legacy-id"],
   );
 });
 

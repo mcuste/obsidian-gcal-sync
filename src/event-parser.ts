@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface CalendarDateTime {
   date?: string;
   dateTime?: string;
@@ -5,8 +7,10 @@ export interface CalendarDateTime {
 }
 
 export interface VaultCalendarEvent {
+  /** Local identity: `<note path>::<locator>`. Never leaves this device. */
   sourceKey: string;
-  sourcePath: string;
+  /** The identity stored on Google, hashed so note and folder names are not uploaded. */
+  remoteSourceKey: string;
   summary: string;
   start: CalendarDateTime;
   end: CalendarDateTime;
@@ -30,6 +34,7 @@ interface ParseFileOptions {
   content: string;
   frontmatter?: Record<string, unknown>;
   timeZone: string;
+  vaultId: string;
 }
 
 const EVENT_DIRECTIVE = /#gcal:([^\s#]+)/g;
@@ -39,6 +44,8 @@ const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 const DURATION = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/;
 const RRULE = /^FREQ=(?:DAILY|WEEKLY|MONTHLY|YEARLY)(?:;[A-Z]+=[A-Z0-9,+-]+)*$/;
+
+export const MAX_EVENTS_PER_NOTE = 100;
 
 const DAY_CODES: Record<string, string> = {
   monday: "MO",
@@ -83,6 +90,14 @@ export function parseVaultEvents(options: ParseFileOptions): ParseResult {
     keys.add(event.sourceKey);
   }
 
+  if (result.events.length > MAX_EVENTS_PER_NOTE) {
+    result.issues.push({
+      sourcePath: options.path,
+      location: "note",
+      message: `A note can declare at most ${MAX_EVENTS_PER_NOTE} calendar events`,
+    });
+  }
+
   if (result.issues.length > 0) {
     result.events = [];
   }
@@ -110,7 +125,7 @@ function parseFrontmatter(options: ParseFileOptions, result: ParseResult): void 
 }
 
 function parseLines(options: ParseFileOptions, result: ParseResult): void {
-  const lines = options.content.split(/\r?\n/);
+  const lines = maskIgnoredMarkdown(options.content).split(/\r?\n/);
   lines.forEach((line, lineIndex) => {
     const repeat = REPEAT_DIRECTIVE.exec(line)?.[1];
     const explicitId = ID_DIRECTIVE.exec(line)?.[1];
@@ -154,7 +169,7 @@ function addEvent(
     const recurrence = input.repeat ? [normalizeRecurrence(input.repeat)] : undefined;
     result.events.push({
       sourceKey: input.sourceKey,
-      sourcePath: options.path,
+      remoteSourceKey: makeRemoteSourceKey(options.vaultId, input.sourceKey),
       summary: input.summary,
       start: schedule.start,
       end: schedule.end,
@@ -277,8 +292,142 @@ function cleanSummary(value: string): string {
     .trim();
 }
 
+function maskIgnoredMarkdown(content: string): string {
+  return maskFencesAndComments(maskInlineCode(content));
+}
+
+function maskInlineCode(content: string): string {
+  const runs: Array<{ start: number; end: number; length: number; canOpen: boolean }> = [];
+  for (let index = 0; index < content.length; ) {
+    if (content[index] !== "`") {
+      index += 1;
+      continue;
+    }
+
+    const start = index;
+    while (content[index] === "`") index += 1;
+    runs.push({
+      start,
+      end: index,
+      length: index - start,
+      canOpen: !isEscaped(content, start),
+    });
+  }
+
+  const nextByLength = new Map<number, number>();
+  const nextSameLength = new Array<number | undefined>(runs.length);
+  for (let index = runs.length - 1; index >= 0; index -= 1) {
+    const run = runs[index];
+    if (!run) continue;
+    nextSameLength[index] = nextByLength.get(run.length);
+    nextByLength.set(run.length, index);
+  }
+
+  const masked = content.split("");
+  for (let index = 0; index < runs.length; index += 1) {
+    const opening = runs[index];
+    const closingIndex = nextSameLength[index];
+    if (!opening?.canOpen || closingIndex === undefined) continue;
+    const closing = runs[closingIndex];
+    if (!closing) continue;
+    maskRange(masked, opening.start, closing.end);
+    index = closingIndex;
+  }
+  return masked.join("");
+}
+
+function maskFencesAndComments(content: string): string {
+  const lines = content.split(/\r?\n/);
+  let commentOpen = false;
+  let fence: { marker: string; length: number } | undefined;
+
+  return lines
+    .map((line) => {
+      if (fence) {
+        if (isClosingFence(line, fence)) fence = undefined;
+        return " ".repeat(line.length);
+      }
+
+      const commentResult = maskHtmlComments(line, commentOpen);
+      commentOpen = commentResult.commentOpen;
+      const opening = /^\s{0,3}(`{3,}|~{3,})/.exec(commentResult.line)?.[1];
+      if (!opening) return commentResult.line;
+
+      fence = { marker: opening[0] ?? "", length: opening.length };
+      return " ".repeat(line.length);
+    })
+    .join("\n");
+}
+
+function maskHtmlComments(
+  line: string,
+  initiallyOpen: boolean,
+): { line: string; commentOpen: boolean } {
+  const masked = line.split("");
+  let commentOpen = initiallyOpen;
+  let cursor = 0;
+
+  while (cursor < line.length) {
+    if (commentOpen) {
+      const end = line.indexOf("-->", cursor);
+      if (end === -1) {
+        maskRange(masked, cursor, line.length);
+        break;
+      }
+      maskRange(masked, cursor, end + 3);
+      cursor = end + 3;
+      commentOpen = false;
+      continue;
+    }
+
+    const start = line.indexOf("<!--", cursor);
+    if (start === -1) break;
+    const end = line.indexOf("-->", start + 4);
+    if (end === -1) {
+      maskRange(masked, start, line.length);
+      commentOpen = true;
+      break;
+    }
+    maskRange(masked, start, end + 3);
+    cursor = end + 3;
+  }
+
+  return { line: masked.join(""), commentOpen };
+}
+
+function isClosingFence(line: string, fence: { marker: string; length: number }): boolean {
+  let cursor = 0;
+  while (cursor < 3 && line[cursor] === " ") cursor += 1;
+  const start = cursor;
+  while (line[cursor] === fence.marker) cursor += 1;
+  return cursor - start >= fence.length && line.slice(cursor).trim().length === 0;
+}
+
+function isEscaped(content: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && content[cursor] === "\\"; cursor -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function maskRange(content: string[], start: number, end: number): void {
+  for (let index = start; index < end; index += 1) {
+    if (content[index] !== "\n" && content[index] !== "\r") content[index] = " ";
+  }
+}
+
 function makeSourceKey(path: string, locator: string): string {
   return `${path}::${locator}`;
+}
+
+export function makeRemoteSourceKey(vaultId: string, sourceKey: string): string {
+  const digest = createHash("sha256")
+    .update(vaultId)
+    .update("\0")
+    .update(sourceKey)
+    .digest("base64url");
+  return `v1:${digest}`;
 }
 
 function normalizeDayName(value: string): string {
