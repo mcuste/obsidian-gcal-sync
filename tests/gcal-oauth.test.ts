@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { get } from "node:http";
 import test from "node:test";
-import { authorizeGoogle, type GoogleAuthorizationDependencies } from "../src/google-oauth";
+import {
+  AUTHORIZATION_CANCELLED_MESSAGE,
+  AUTHORIZATION_TIMEOUT_MS,
+  authorizeGoogle,
+  type GoogleAuthorizationDependencies,
+} from "../src/gcal-oauth";
 
 interface HttpResult {
   status: number;
@@ -224,10 +229,51 @@ test("authorization timeout uses fake time and closes the listener", async (cont
   const authorizationUrl = await opened.promise;
 
   try {
-    context.mock.timers.tick(5 * 60 * 1000);
+    context.mock.timers.tick(AUTHORIZATION_TIMEOUT_MS);
     await assert.rejects(authorization, /Google authorization timed out/);
   } finally {
     context.mock.timers.reset();
   }
   await assertListenerClosed(authorizationUrl);
+});
+
+test("aborting mid-flow stops waiting and closes the listener", async () => {
+  const opened = Promise.withResolvers<URL>();
+  const controller = new AbortController();
+  const authorization = authorizeGoogle(
+    { clientId: "client-id", signal: controller.signal },
+    {
+      openExternal(value) {
+        opened.resolve(new URL(value));
+      },
+      async exchangeCode() {
+        throw new Error("Token exchange must not run");
+      },
+    },
+  );
+  const authorizationUrl = await opened.promise;
+
+  controller.abort();
+
+  await assert.rejects(authorization, { message: AUTHORIZATION_CANCELLED_MESSAGE });
+  await assertListenerClosed(authorizationUrl);
+});
+
+test("an already-aborted signal never opens a browser or a listener", async () => {
+  let opened = false;
+  await assert.rejects(
+    authorizeGoogle(
+      { clientId: "client-id", signal: AbortSignal.abort() },
+      {
+        openExternal() {
+          opened = true;
+        },
+        async exchangeCode() {
+          throw new Error("Token exchange must not run");
+        },
+      },
+    ),
+    { message: AUTHORIZATION_CANCELLED_MESSAGE },
+  );
+  assert.equal(opened, false);
 });

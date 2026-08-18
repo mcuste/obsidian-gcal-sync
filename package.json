@@ -1,5 +1,5 @@
 {
-  "name": "obsidian-gcloud",
+  "name": "obsidian-gcal-sync",
   "version": "0.1.0",
   "description": "Sync Google Calendar events declared in an Obsidian vault.",
   "type": "module",
@@ -14,7 +14,8 @@
     "lint": "biome lint .",
     "quality": "biome check .",
     "security": "pnpm audit --audit-level high",
-    "test": "tsx --tsconfig tests/tsconfig.json --test tests/**/*.test.ts"
+    "test": "tsx --tsconfig tests/tsconfig.json --test tests/**/*.test.ts",
+    "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "engines": {
     "node": ">=22"

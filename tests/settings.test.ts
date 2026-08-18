@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_MAX_CHANGES_PER_SYNC } from "../src/google-calendar";
-import { defaultSettings, parseSyncFolders } from "../src/settings";
+import { DEFAULT_MAX_CHANGES_PER_SYNC } from "../src/gcal";
+import {
+  defaultSettings,
+  parseSyncFolders,
+  resolveTimeZone,
+  systemTimeZone,
+} from "../src/settings";
 
 test("a new vault syncs everything under the default change limit", () => {
   const settings = defaultSettings("vault-id");
@@ -16,4 +21,10 @@ test("synced folders are trimmed to vault-relative paths and de-duplicated", () 
     "Projects/Planning",
   ]);
   assert.deepEqual(parseSyncFolders("   \n\n"), []);
+});
+
+test("an empty event time zone follows this device", () => {
+  assert.equal(defaultSettings("vault-id").timeZone, "");
+  assert.equal(resolveTimeZone(""), systemTimeZone());
+  assert.equal(resolveTimeZone("Asia/Tokyo"), "Asia/Tokyo");
 });

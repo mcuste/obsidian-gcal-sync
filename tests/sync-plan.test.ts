@@ -193,3 +193,82 @@ test("updates a remote recurrence when the declaration removes it", () => {
     ["event-id"],
   );
 });
+
+/** A note that wrote a time but no date, resolved against today at parse time. */
+function impliedToday(sourceKey: string, date: string, time: string): VaultCalendarEvent {
+  return {
+    ...desired(sourceKey, "Standup"),
+    start: { dateTime: `${date}T${time}:00`, timeZone: "UTC" },
+    end: { dateTime: `${date}T${time}:00`, timeZone: "UTC" },
+    recurrence: undefined,
+    impliedDate: true,
+  };
+}
+
+function wallClockRemote(id: string, sourceKey: string, start: string, end: string): GoogleEvent {
+  return {
+    id,
+    summary: "Standup",
+    start: { dateTime: start, timeZone: "UTC" },
+    end: { dateTime: end, timeZone: "UTC" },
+    extendedProperties: { private: { obsidianSourceKey: remoteKey(sourceKey) } },
+  };
+}
+
+test("an implied date stays on the day the event was created", () => {
+  const today = {
+    ...impliedToday("standup", "2026-08-20", "09:00"),
+    end: { dateTime: "2026-08-20T09:30:00", timeZone: "UTC" },
+  };
+  const plan = planReconciliation(
+    [today],
+    [wallClockRemote("standup-id", "standup", "2026-08-18T09:00:00", "2026-08-18T09:30:00")],
+  );
+
+  assert.equal(plan.unchanged, 1, "the event should not be moved forward each day");
+  assert.deepEqual(plan.updates, []);
+  assert.deepEqual(plan.deletes, []);
+});
+
+test("retiming an implied-date event keeps its original day", () => {
+  const retimed = {
+    ...impliedToday("standup", "2026-08-20", "10:00"),
+    end: { dateTime: "2026-08-20T11:00:00", timeZone: "UTC" },
+  };
+  const plan = planReconciliation(
+    [retimed],
+    [wallClockRemote("standup-id", "standup", "2026-08-18T09:00:00", "2026-08-18T10:00:00")],
+  );
+
+  assert.deepEqual(
+    plan.updates.map((update) => [update.eventId, update.event.start.dateTime]),
+    [["standup-id", "2026-08-18T10:00:00"]],
+  );
+  assert.equal(plan.updates[0]?.event.end.dateTime, "2026-08-18T11:00:00");
+});
+
+test("a declared date is never re-anchored to the remote event", () => {
+  const declared = {
+    ...impliedToday("standup", "2026-08-20", "09:00"),
+    end: { dateTime: "2026-08-20T09:30:00", timeZone: "UTC" },
+    impliedDate: undefined,
+  };
+  const plan = planReconciliation(
+    [declared],
+    [wallClockRemote("standup-id", "standup", "2026-08-18T09:00:00", "2026-08-18T09:30:00")],
+  );
+
+  assert.deepEqual(
+    plan.updates.map((update) => update.event.start.dateTime),
+    ["2026-08-20T09:00:00"],
+  );
+});
+
+test("an implied date is used as written when the event does not exist yet", () => {
+  const plan = planReconciliation([impliedToday("standup", "2026-08-20", "09:00")], []);
+
+  assert.deepEqual(
+    plan.creates.map((event) => event.start.dateTime),
+    ["2026-08-20T09:00:00"],
+  );
+});

@@ -11,17 +11,18 @@ import { confirmReconciliation } from "./confirm-modal";
 import { type ParseIssue, parseVaultEvents, type VaultCalendarEvent } from "./event-parser";
 import {
   DEFAULT_MAX_CHANGES_PER_SYNC,
-  GoogleCalendarClient,
-  type GoogleCalendarGateway,
-  type GoogleCalendarInfo,
+  GcalClient,
+  type GcalGateway,
+  type GcalInfo,
   type GoogleCredentials,
   type ReconciliationSummary,
   type SyncStats,
-} from "./google-calendar";
+} from "./gcal";
 import {
   defaultSettings,
-  GoogleCalendarSettingTab,
-  type GoogleCalendarSyncSettings,
+  GcalSettingTab,
+  type GcalSyncSettings,
+  resolveTimeZone,
 } from "./settings";
 
 const CHANGE_DEBOUNCE_MS = 1_000;
@@ -47,12 +48,12 @@ export interface PluginTimers {
   clearInterval(timer: number): void;
 }
 
-export interface GoogleCalendarSyncPluginDependencies {
+export interface GcalSyncPluginDependencies {
   createCalendarGateway?(
     credentials: GoogleCredentials,
     calendarId: string,
     vaultId: string,
-  ): GoogleCalendarGateway;
+  ): GcalGateway;
   timers?: PluginTimers;
   confirmPlan?(summary: ReconciliationSummary): Promise<boolean>;
 }
@@ -64,8 +65,8 @@ const WINDOW_TIMERS: PluginTimers = {
   clearInterval: (timer) => window.clearInterval(timer),
 };
 
-export default class GoogleCalendarSyncPlugin extends Plugin {
-  override settings: GoogleCalendarSyncSettings = defaultSettings("");
+export default class GcalSyncPlugin extends Plugin {
+  override settings: GcalSyncSettings = defaultSettings("");
 
   private eventsByPath = new Map<string, VaultCalendarEvent[]>();
   private pendingPaths = new Set<string>();
@@ -74,21 +75,16 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
   private syncTail: Promise<void> = Promise.resolve();
   private lastPendingApproval = "";
   private readonly createCalendarGateway: NonNullable<
-    GoogleCalendarSyncPluginDependencies["createCalendarGateway"]
+    GcalSyncPluginDependencies["createCalendarGateway"]
   >;
   private readonly timers: PluginTimers;
-  private readonly confirmPlan: NonNullable<GoogleCalendarSyncPluginDependencies["confirmPlan"]>;
+  private readonly confirmPlan: NonNullable<GcalSyncPluginDependencies["confirmPlan"]>;
 
-  constructor(
-    app: App,
-    manifest: PluginManifest,
-    dependencies: GoogleCalendarSyncPluginDependencies = {},
-  ) {
+  constructor(app: App, manifest: PluginManifest, dependencies: GcalSyncPluginDependencies = {}) {
     super(app, manifest);
     this.createCalendarGateway =
       dependencies.createCalendarGateway ??
-      ((credentials, calendarId, vaultId) =>
-        new GoogleCalendarClient(credentials, calendarId, vaultId));
+      ((credentials, calendarId, vaultId) => new GcalClient(credentials, calendarId, vaultId));
     this.timers = dependencies.timers ?? WINDOW_TIMERS;
     this.confirmPlan =
       dependencies.confirmPlan ?? ((summary) => confirmReconciliation(this.app, summary));
@@ -96,10 +92,10 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
   override async onload(): Promise<void> {
     await this.loadSettings();
-    this.addSettingTab(new GoogleCalendarSettingTab(this.app, this));
+    this.addSettingTab(new GcalSettingTab(this.app, this));
     this.addCommand({
-      id: "sync-google-calendar-now",
-      name: "Sync Google Calendar now",
+      id: "sync-now",
+      name: "Sync now",
       callback: () => void this.syncNow(true),
     });
 
@@ -174,7 +170,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
   }
 
   private async loadSettings(): Promise<void> {
-    const stored = (await this.loadData()) as Partial<GoogleCalendarSyncSettings> | null;
+    const stored = (await this.loadData()) as Partial<GcalSyncSettings> | null;
     const vaultId = stored?.vaultId || randomUUID();
     const defaults = defaultSettings(vaultId);
     const settings = Object.assign(defaults, stored ?? {}, { vaultId });
@@ -282,7 +278,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
       basename: file.basename,
       content,
       frontmatter,
-      timeZone: this.settings.timeZone,
+      timeZone: resolveTimeZone(this.settings.timeZone),
       vaultId: this.settings.vaultId,
     });
   }
@@ -309,7 +305,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
       if (signature === this.lastPendingApproval) return;
       this.lastPendingApproval = signature;
       new Notice(
-        `Google Calendar sync needs review (${signature}). Run "Sync Google Calendar now" to approve it.`,
+        `Google Calendar sync needs review (${signature}). Run the "Sync now" command to approve it.`,
         10_000,
       );
       return;
@@ -319,15 +315,15 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
     if (interactive || changedEventCount(stats) > 0) new Notice(formatStats(stats));
   }
 
-  async listWritableCalendars(): Promise<GoogleCalendarInfo[]> {
+  async listWritableCalendars(): Promise<GcalInfo[]> {
     return this.createClient().listWritableCalendars();
   }
 
-  async createCalendar(summary: string): Promise<GoogleCalendarInfo> {
+  async createCalendar(summary: string): Promise<GcalInfo> {
     return this.createClient().createCalendar(summary);
   }
 
-  private createClient(): GoogleCalendarGateway {
+  private createClient(): GcalGateway {
     const credentials: GoogleCredentials = {
       clientId: this.readSecret(this.settings.clientIdSecret, "OAuth client ID"),
       refreshToken: this.readSecret(this.settings.refreshTokenSecret, "refresh token"),

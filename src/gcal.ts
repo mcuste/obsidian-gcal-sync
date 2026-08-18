@@ -65,27 +65,27 @@ export interface ReconciliationOptions {
   approvePlan?(summary: ReconciliationSummary): Promise<boolean>;
 }
 
-export interface GoogleCalendarInfo {
+export interface GcalInfo {
   id: string;
   name: string;
   primary: boolean;
 }
 
-export interface GoogleCalendarGateway {
+export interface GcalGateway {
   reconcile(
     desiredEvents: Iterable<VaultCalendarEvent>,
     options?: ReconciliationOptions,
   ): Promise<SyncStats>;
-  listWritableCalendars(): Promise<GoogleCalendarInfo[]>;
-  createCalendar(summary: string): Promise<GoogleCalendarInfo>;
+  listWritableCalendars(): Promise<GcalInfo[]>;
+  createCalendar(summary: string): Promise<GcalInfo>;
 }
 
-interface GoogleCalendarList {
-  items?: GoogleCalendarListEntry[];
+interface GcalList {
+  items?: GcalListEntry[];
   nextPageToken?: string;
 }
 
-interface GoogleCalendarListEntry {
+interface GcalListEntry {
   id?: string;
   summary?: string;
   summaryOverride?: string;
@@ -93,7 +93,7 @@ interface GoogleCalendarListEntry {
   accessRole?: string;
 }
 
-interface GoogleCalendarResource {
+interface GcalResource {
   id?: string;
   summary?: string;
 }
@@ -119,7 +119,7 @@ interface EventBody {
   };
 }
 
-export class GoogleCalendarClient implements GoogleCalendarGateway {
+export class GcalClient implements GcalGateway {
   constructor(
     private readonly credentials: GoogleCredentials,
     private readonly calendarId: string,
@@ -170,9 +170,9 @@ export class GoogleCalendarClient implements GoogleCalendarGateway {
     };
   }
 
-  async listWritableCalendars(): Promise<GoogleCalendarInfo[]> {
+  async listWritableCalendars(): Promise<GcalInfo[]> {
     const accessToken = await refreshAccessToken(this.credentials, this.transport);
-    const calendars: GoogleCalendarInfo[] = [];
+    const calendars: GcalInfo[] = [];
     let pageToken: string | undefined;
     do {
       const query = new URLSearchParams({
@@ -182,7 +182,7 @@ export class GoogleCalendarClient implements GoogleCalendarGateway {
       });
       if (pageToken) query.set("pageToken", pageToken);
 
-      const response = await this.request<GoogleCalendarList>(
+      const response = await this.request<GcalList>(
         accessToken,
         "GET",
         `/users/me/calendarList?${query.toString()}`,
@@ -204,12 +204,12 @@ export class GoogleCalendarClient implements GoogleCalendarGateway {
     );
   }
 
-  async createCalendar(summary: string): Promise<GoogleCalendarInfo> {
+  async createCalendar(summary: string): Promise<GcalInfo> {
     const normalizedSummary = summary.trim();
     if (!normalizedSummary) throw new Error("Calendar name is required");
 
     const accessToken = await refreshAccessToken(this.credentials, this.transport);
-    const calendar = await this.request<GoogleCalendarResource>(accessToken, "POST", "/calendars", {
+    const calendar = await this.request<GcalResource>(accessToken, "POST", "/calendars", {
       summary: normalizedSummary,
     });
     if (!calendar.id) {

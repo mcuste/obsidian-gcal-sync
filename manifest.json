@@ -1,9 +1,10 @@
 {
-  "id": "obsidian-gcloud",
+  "id": "gcal-sync",
   "name": "Google Calendar Sync",
   "version": "0.1.0",
   "minAppVersion": "1.11.5",
   "description": "Sync Google Calendar events declared in vault notes.",
   "author": "mcuste",
+  "authorUrl": "https://github.com/mcuste",
   "isDesktopOnly": true
 }

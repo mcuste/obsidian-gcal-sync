@@ -15,6 +15,11 @@ export interface VaultCalendarEvent {
   start: CalendarDateTime;
   end: CalendarDateTime;
   recurrence?: string[];
+  /**
+   * The note gave a time but no date, so the date was filled in from today. Once the event exists
+   * on Google its own date wins, which keeps the event where it was first created.
+   */
+  impliedDate?: true;
 }
 
 export interface ParseIssue {
@@ -35,17 +40,22 @@ interface ParseFileOptions {
   frontmatter?: Record<string, unknown>;
   timeZone: string;
   vaultId: string;
+  /** Resolves a bare time such as 14:00 to a date. Defaults to the current moment. */
+  now?: Date;
 }
 
 const EVENT_DIRECTIVE = /#gcal:([^\s#]+)/g;
 const REPEAT_DIRECTIVE = /#gcal-repeat:([^\s#]+)/i;
 const ID_DIRECTIVE = /#gcal-id:([a-zA-Z0-9_-]+)/i;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
-const DURATION = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/;
+const DATE_TIME = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(Z|[+-]\d{2}:\d{2})$/;
+const LOCAL_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+const LOCAL_TIME = /^\d{2}:\d{2}$/;
+const DURATION = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/;
 const RRULE = /^FREQ=(?:DAILY|WEEKLY|MONTHLY|YEARLY)(?:;[A-Z]+=[A-Z0-9,+-]+)*$/;
 
 export const MAX_EVENTS_PER_NOTE = 100;
+const DEFAULT_EVENT_MS = 60 * 60 * 1000;
 
 const DAY_CODES: Record<string, string> = {
   monday: "MO",
@@ -63,6 +73,26 @@ const DAY_CODES: Record<string, string> = {
   sunday: "SU",
   sun: "SU",
 };
+/** Frequencies that "every 2 weeks" style rules build on. */
+const UNIT_FREQUENCIES: Record<string, string> = {
+  day: "DAILY",
+  week: "WEEKLY",
+  month: "MONTHLY",
+  year: "YEARLY",
+};
+const NAMED_INTERVALS: Record<string, string> = {
+  daily: "FREQ=DAILY",
+  weekly: "FREQ=WEEKLY",
+  fortnightly: "FREQ=WEEKLY;INTERVAL=2",
+  monthly: "FREQ=MONTHLY",
+  quarterly: "FREQ=MONTHLY;INTERVAL=3",
+  yearly: "FREQ=YEARLY",
+  annually: "FREQ=YEARLY",
+  weekdays: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+};
+const EVERY_N_UNITS = /^(\d+)-(day|week|month|year)s?$/;
+const EVERY_UNIT = /^(day|week|month|year)s?$/;
+
 const ORDERED_DAY_NAMES = [
   "monday",
   "tuesday",
@@ -165,7 +195,7 @@ function addEvent(
   },
 ): void {
   try {
-    const schedule = parseSchedule(input.raw, options.timeZone);
+    const schedule = parseSchedule(input.raw, options.timeZone, options.now);
     const recurrence = input.repeat ? [normalizeRecurrence(input.repeat)] : undefined;
     result.events.push({
       sourceKey: input.sourceKey,
@@ -174,6 +204,7 @@ function addEvent(
       start: schedule.start,
       end: schedule.end,
       recurrence,
+      ...(schedule.impliedDate ? { impliedDate: true as const } : {}),
     });
   } catch (error) {
     result.issues.push({
@@ -184,16 +215,27 @@ function addEvent(
   }
 }
 
+export interface EventSchedule {
+  start: CalendarDateTime;
+  end: CalendarDateTime;
+  impliedDate?: boolean;
+}
+
+/**
+ * Accepted forms, in order: a date (all-day), a timestamp with no UTC offset (read in `timeZone`),
+ * a bare time (today in `timeZone`), and a timestamp carrying Z or an offset (an exact instant).
+ * Times are written to the minute; Google is sent the RFC 3339 seconds it requires.
+ */
 export function parseSchedule(
   raw: string,
   timeZone: string,
-): { start: CalendarDateTime; end: CalendarDateTime } {
+  now: Date = new Date(),
+): EventSchedule {
   const separator = raw.indexOf("/");
   const startValue = separator === -1 ? raw : raw.slice(0, separator);
   const durationValue = separator === -1 ? undefined : raw.slice(separator + 1);
 
-  const dateMatch = DATE.exec(startValue);
-  if (dateMatch) {
+  if (DATE.test(startValue)) {
     assertValidCalendarDate(startValue);
     const durationDays = durationValue ? parseAllDayDuration(durationValue) : 1;
     return {
@@ -202,19 +244,74 @@ export function parseSchedule(
     };
   }
 
-  if (!DATE_TIME.test(startValue)) {
-    throw new Error("Expected YYYY-MM-DD or an RFC 3339 timestamp with Z or a UTC offset");
+  const durationMs = durationValue ? parseDuration(durationValue) : DEFAULT_EVENT_MS;
+
+  const impliedDate = LOCAL_TIME.test(startValue);
+  if (impliedDate || LOCAL_DATE_TIME.test(startValue)) {
+    const local = impliedDate ? `${currentDate(timeZone, now)}T${startValue}` : startValue;
+    const start = withSeconds(local);
+    assertValidCalendarDate(start.slice(0, 10));
+    assertValidWallClock(start);
+    return {
+      start: { dateTime: start, timeZone },
+      end: { dateTime: addWallClockMs(start, durationMs), timeZone },
+      ...(impliedDate ? { impliedDate } : {}),
+    };
+  }
+
+  const absolute = DATE_TIME.exec(startValue);
+  if (!absolute?.[1] || !absolute[2]) {
+    throw new Error(
+      "Expected a date (2026-08-18), a time (14:00), a local timestamp (2026-08-18T14:00), or one with Z or a UTC offset",
+    );
   }
   assertValidCalendarDate(startValue.slice(0, 10));
+  assertValidWallClock(withSeconds(absolute[1]));
 
-  const durationMs = durationValue ? parseDuration(durationValue) : 60 * 60 * 1000;
-  const startMs = Date.parse(startValue);
+  const start = `${withSeconds(absolute[1])}${absolute[2]}`;
+  const startMs = Date.parse(start);
   if (!Number.isFinite(startMs)) throw new Error("Invalid event timestamp");
 
   return {
-    start: { dateTime: startValue, timeZone },
-    end: { dateTime: new Date(startMs + durationMs).toISOString(), timeZone },
+    start: { dateTime: start, timeZone },
+    end: { dateTime: toRfc3339(new Date(startMs + durationMs)), timeZone },
   };
+}
+
+/** Google requires RFC 3339, which mandates seconds, so a minute-precision value gains `:00`. */
+function withSeconds(value: string): string {
+  return `${value}:00`;
+}
+
+function toRfc3339(value: Date): string {
+  return value.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function assertValidWallClock(value: string): void {
+  const parsed = Date.parse(`${value}Z`);
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 19) !== value) {
+    throw new Error("Invalid time of day");
+  }
+}
+
+/** Today's calendar date in the given time zone, which a bare time is measured against. */
+function currentDate(timeZone: string, now: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const part = (type: string): string => parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+/**
+ * Adds a duration to a wall-clock timestamp without leaving the time zone. An event that spans a
+ * daylight-saving change keeps its wall-clock length, which is how Google reads these values.
+ */
+function addWallClockMs(value: string, durationMs: number): string {
+  return new Date(Date.parse(`${value}Z`) + durationMs).toISOString().slice(0, 19);
 }
 
 export function normalizeRecurrence(value: string): string {
@@ -222,11 +319,23 @@ export function normalizeRecurrence(value: string): string {
     .trim()
     .toLowerCase()
     .replace(/^every-/, "");
-  if (normalized === "daily") return "RRULE:FREQ=DAILY";
-  if (normalized === "weekly") return "RRULE:FREQ=WEEKLY";
-  if (normalized === "weekdays") {
-    return "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR";
+  const named = NAMED_INTERVALS[normalized];
+  if (named) return `RRULE:${named}`;
+
+  const everyN = EVERY_N_UNITS.exec(normalized);
+  if (everyN?.[1] && everyN[2]) {
+    const interval = Number(everyN[1]);
+    if (!Number.isInteger(interval) || interval < 1) {
+      throw new Error("Repeat interval must be a whole number of units, such as every-2-weeks");
+    }
+    const frequency = UNIT_FREQUENCIES[everyN[2]];
+    return interval === 1
+      ? `RRULE:FREQ=${frequency}`
+      : `RRULE:FREQ=${frequency};INTERVAL=${interval}`;
   }
+
+  const everyUnit = EVERY_UNIT.exec(normalized);
+  if (everyUnit?.[1]) return `RRULE:FREQ=${UNIT_FREQUENCIES[everyUnit[1]]}`;
 
   const range = /^([a-z]+)-([a-z]+)$/.exec(normalized);
   if (range?.[1] && range[2]) {
@@ -248,7 +357,9 @@ export function normalizeRecurrence(value: string): string {
 
   const rrule = value.toUpperCase().replace(/^RRULE:/, "");
   if (!RRULE.test(rrule)) {
-    throw new Error("Invalid recurrence; use weekly, monday-thursday, or an RRULE");
+    throw new Error(
+      "Invalid recurrence; use weekly, quarterly, every-2-weeks, monday-thursday, or an RRULE",
+    );
   }
   return `RRULE:${rrule}`;
 }
@@ -262,12 +373,11 @@ function parseAllDayDuration(value: string): number {
 
 function parseDuration(value: string): number {
   const match = DURATION.exec(value);
-  if (!match) throw new Error("Invalid ISO 8601 duration");
+  if (!match) throw new Error("Invalid duration; use days, hours, and minutes such as PT90M");
   const days = Number(match[1] ?? 0);
   const hours = Number(match[2] ?? 0);
   const minutes = Number(match[3] ?? 0);
-  const seconds = Number(match[4] ?? 0);
-  const durationMs = (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  const durationMs = ((days * 24 + hours) * 60 + minutes) * 60 * 1000;
   if (durationMs <= 0) throw new Error("Event duration must be greater than zero");
   return durationMs;
 }

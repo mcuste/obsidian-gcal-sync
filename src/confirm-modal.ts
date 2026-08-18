@@ -1,5 +1,5 @@
 import { type App, Modal, Setting } from "obsidian";
-import type { ReconciliationSummary } from "./google-calendar";
+import type { ReconciliationSummary } from "./gcal";
 
 /**
  * Asks the user to approve a large or destructive sync before it reaches Google Calendar.

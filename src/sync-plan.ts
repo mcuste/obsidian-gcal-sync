@@ -51,13 +51,13 @@ export function planReconciliation(
     const current = matching[0];
     if (!current) {
       plan.creates.push(desired);
-    } else if (
-      remoteSourceKey(current) !== desired.remoteSourceKey ||
-      !eventsEqual(current, desired)
-    ) {
-      plan.updates.push({ eventId: requireEventId(current), event: desired });
     } else {
-      plan.unchanged += 1;
+      const anchored = anchorImpliedDate(desired, current);
+      if (remoteSourceKey(current) !== desired.remoteSourceKey || !eventsEqual(current, anchored)) {
+        plan.updates.push({ eventId: requireEventId(current), event: anchored });
+      } else {
+        plan.unchanged += 1;
+      }
     }
 
     for (const duplicate of matching.slice(1)) {
@@ -88,6 +88,37 @@ function groupRemoteEvents(events: GoogleEvent[]): Map<string, GoogleEvent[]> {
 
 function remoteSourceKey(event: GoogleEvent): string | undefined {
   return event.extendedProperties?.private?.obsidianSourceKey;
+}
+
+const WALL_CLOCK = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}$/;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * A note that gave a time but no date is anchored to the date the event already has on Google, so
+ * it stays where it was first created instead of moving forward every day. The time of day and the
+ * duration still come from the note, so editing the time retimes the event in place.
+ */
+function anchorImpliedDate(desired: VaultCalendarEvent, remote: GoogleEvent): VaultCalendarEvent {
+  if (!desired.impliedDate) return desired;
+  const desiredDate = WALL_CLOCK.exec(desired.start.dateTime ?? "")?.[1];
+  const remoteDate = WALL_CLOCK.exec(remote.start?.dateTime ?? "")?.[1];
+  if (!desiredDate || !remoteDate || desiredDate === remoteDate) return desired;
+
+  const shiftDays =
+    (Date.parse(`${remoteDate}T00:00:00Z`) - Date.parse(`${desiredDate}T00:00:00Z`)) / MS_PER_DAY;
+  if (!Number.isInteger(shiftDays)) return desired;
+
+  return {
+    ...desired,
+    start: shiftWallClock(desired.start, shiftDays),
+    end: shiftWallClock(desired.end, shiftDays),
+  };
+}
+
+function shiftWallClock(value: CalendarDateTime, days: number): CalendarDateTime {
+  if (!value.dateTime) return value;
+  const shifted = new Date(Date.parse(`${value.dateTime}Z`) + days * MS_PER_DAY);
+  return { ...value, dateTime: shifted.toISOString().slice(0, 19) };
 }
 
 function eventsEqual(remote: GoogleEvent, desired: VaultCalendarEvent): boolean {

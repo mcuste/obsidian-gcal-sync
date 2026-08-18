@@ -16,7 +16,7 @@ test("parses inline event title, duration, recurrence, and stable ID", () => {
     path: "Projects/Launch.md",
     basename: "Launch",
     content:
-      "- [ ] Team standup #gcal:2026-08-18T09:00:00-04:00/PT30M #gcal-repeat:monday-thursday #gcal-id:standup",
+      "- [ ] Team standup #gcal:2026-08-18T09:00-04:00/PT30M #gcal-repeat:monday-thursday #gcal-id:standup",
     timeZone: TIME_ZONE,
     vaultId: VAULT_ID,
   });
@@ -32,7 +32,7 @@ test("parses inline event title, duration, recurrence, and stable ID", () => {
         timeZone: TIME_ZONE,
       },
       end: {
-        dateTime: "2026-08-18T13:30:00.000Z",
+        dateTime: "2026-08-18T13:30:00Z",
         timeZone: TIME_ZONE,
       },
       recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH"],
@@ -77,8 +77,8 @@ test("parses multiple frontmatter events using the note name", () => {
 });
 
 test("uses a one-hour default for a timestamp without duration", () => {
-  const schedule = parseSchedule("2026-08-18T14:00:00Z", "UTC");
-  assert.equal(schedule.end.dateTime, "2026-08-18T15:00:00.000Z");
+  const schedule = parseSchedule("2026-08-18T14:00Z", "UTC");
+  assert.equal(schedule.end.dateTime, "2026-08-18T15:00:00Z");
 });
 
 test("normalizes recurrence aliases and RRULE values", () => {
@@ -87,13 +87,95 @@ test("normalizes recurrence aliases and RRULE values", () => {
   assert.equal(normalizeRecurrence("FREQ=MONTHLY;BYDAY=MO"), "RRULE:FREQ=MONTHLY;BYDAY=MO");
 });
 
-test("rejects local timestamps whose time zone would be ambiguous", () => {
-  assert.throws(() => parseSchedule("2026-08-18T14:00/PT1H", TIME_ZONE), /RFC 3339 timestamp/);
+test("normalizes calendar-period names, including quarterly", () => {
+  assert.equal(normalizeRecurrence("daily"), "RRULE:FREQ=DAILY");
+  assert.equal(normalizeRecurrence("monthly"), "RRULE:FREQ=MONTHLY");
+  assert.equal(normalizeRecurrence("quarterly"), "RRULE:FREQ=MONTHLY;INTERVAL=3");
+  assert.equal(normalizeRecurrence("yearly"), "RRULE:FREQ=YEARLY");
+  assert.equal(normalizeRecurrence("annually"), "RRULE:FREQ=YEARLY");
+  assert.equal(normalizeRecurrence("fortnightly"), "RRULE:FREQ=WEEKLY;INTERVAL=2");
+  assert.equal(normalizeRecurrence("weekdays"), "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR");
+});
+
+test("normalizes every-N-unit intervals and drops a redundant interval of one", () => {
+  assert.equal(normalizeRecurrence("every-2-weeks"), "RRULE:FREQ=WEEKLY;INTERVAL=2");
+  assert.equal(normalizeRecurrence("every-10-days"), "RRULE:FREQ=DAILY;INTERVAL=10");
+  assert.equal(normalizeRecurrence("3-months"), "RRULE:FREQ=MONTHLY;INTERVAL=3");
+  assert.equal(normalizeRecurrence("every-2-years"), "RRULE:FREQ=YEARLY;INTERVAL=2");
+  assert.equal(normalizeRecurrence("every-1-week"), "RRULE:FREQ=WEEKLY");
+  assert.equal(normalizeRecurrence("every-week"), "RRULE:FREQ=WEEKLY");
+  assert.equal(normalizeRecurrence("every-month"), "RRULE:FREQ=MONTHLY");
+  assert.throws(() => normalizeRecurrence("every-0-weeks"), /whole number of units/);
+});
+
+test("rejects seconds and milliseconds in every timed form", () => {
+  for (const value of [
+    "2026-08-18T09:00:00",
+    "2026-08-18T09:00:00Z",
+    "2026-08-18T09:00:00-04:00",
+    "2026-08-18T09:00:00.123Z",
+    "09:00:00",
+  ]) {
+    assert.throws(() => parseSchedule(value, "UTC"), /Expected a date/, `accepted ${value}`);
+  }
+  assert.throws(() => parseSchedule("2026-08-18T09:00Z/PT30S", "UTC"), /Invalid duration/);
+});
+
+test("a bare time is flagged so its date can be pinned once the event exists", () => {
+  const now = new Date("2026-08-18T12:00:00Z");
+
+  assert.equal(parseSchedule("09:00", "UTC", now).impliedDate, true);
+  assert.equal(parseSchedule("2026-08-18T09:00", "UTC").impliedDate, undefined);
+  assert.equal(parseSchedule("2026-08-18", "UTC").impliedDate, undefined);
+});
+
+test("a timestamp without an offset is read in the event time zone", () => {
+  const schedule = parseSchedule("2026-08-18T14:00/PT1H", TIME_ZONE);
+
+  assert.deepEqual(schedule.start, { dateTime: "2026-08-18T14:00:00", timeZone: TIME_ZONE });
+  assert.deepEqual(schedule.end, { dateTime: "2026-08-18T15:00:00", timeZone: TIME_ZONE });
+});
+
+test("a bare time means today in the event time zone", () => {
+  // 23:30 UTC is still the 18th in New York but already the 19th in Tokyo.
+  const now = new Date("2026-08-18T23:30:00Z");
+
+  assert.deepEqual(parseSchedule("09:00", TIME_ZONE, now).start, {
+    dateTime: "2026-08-18T09:00:00",
+    timeZone: TIME_ZONE,
+  });
+  assert.deepEqual(parseSchedule("09:00", "Asia/Tokyo", now).start, {
+    dateTime: "2026-08-19T09:00:00",
+    timeZone: "Asia/Tokyo",
+  });
+});
+
+test("a bare time defaults to an hour and honours an explicit duration", () => {
+  const now = new Date("2026-08-18T12:00:00Z");
+
+  assert.equal(parseSchedule("09:00", "UTC", now).end.dateTime, "2026-08-18T10:00:00");
+  assert.equal(parseSchedule("09:00/PT15M", "UTC", now).end.dateTime, "2026-08-18T09:15:00");
+  assert.equal(parseSchedule("23:30/PT1H", "UTC", now).end.dateTime, "2026-08-19T00:30:00");
+});
+
+test("a date with no time is still an all-day event", () => {
+  const schedule = parseSchedule("2026-08-18", TIME_ZONE);
+
+  assert.deepEqual(schedule.start, { date: "2026-08-18" });
+  assert.deepEqual(schedule.end, { date: "2026-08-19" });
+});
+
+test("rejects a time zone with no time, and impossible times of day", () => {
+  for (const value of ["Z", "+02:00", "-04:00", "T14:00", "14:00+02:00", "2026-08-18T"]) {
+    assert.throws(() => parseSchedule(value, TIME_ZONE), /Expected a date/, `accepted ${value}`);
+  }
+  assert.throws(() => parseSchedule("25:00", TIME_ZONE), /Invalid time of day/);
+  assert.throws(() => parseSchedule("2026-08-18T14:61", TIME_ZONE), /Invalid time of day/);
 });
 
 test("rejects calendar dates that JavaScript would otherwise normalize", () => {
   assert.throws(() => parseSchedule("2026-02-31", "UTC"), /Invalid calendar date/);
-  assert.throws(() => parseSchedule("2026-02-31T14:00:00Z", "UTC"), /Invalid calendar date/);
+  assert.throws(() => parseSchedule("2026-02-31T14:00Z", "UTC"), /Invalid calendar date/);
 });
 
 test("keys uploaded to Google reveal neither the note path nor the vault ID", () => {
@@ -205,8 +287,8 @@ test("invalid durations and weekday ranges invalidate the note", () => {
     path: "Invalid.md",
     basename: "Invalid",
     content: [
-      "Zero #gcal:2026-08-18T09:00:00Z/PT0S",
-      "Malformed #gcal:2026-08-18T09:00:00Z/P1H",
+      "Zero #gcal:2026-08-18T09:00Z/PT0M",
+      "Malformed #gcal:2026-08-18T09:00Z/P1H",
       "Range #gcal:2026-08-18 #gcal-repeat:friday-monday",
     ].join("\n"),
     timeZone: "UTC",
@@ -218,7 +300,7 @@ test("invalid durations and weekday ranges invalidate the note", () => {
     result.issues.map((issue) => issue.message),
     [
       "Event duration must be greater than zero",
-      "Invalid ISO 8601 duration",
+      "Invalid duration; use days, hours, and minutes such as PT90M",
       "Invalid recurring weekday range",
     ],
   );

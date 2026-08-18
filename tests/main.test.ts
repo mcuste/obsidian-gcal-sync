@@ -4,15 +4,15 @@ import type { App, PluginManifest } from "obsidian";
 import { TFile } from "obsidian";
 import { makeRemoteSourceKey, type VaultCalendarEvent } from "../src/event-parser";
 import type {
-  GoogleCalendarGateway,
-  GoogleCalendarInfo,
+  GcalGateway,
+  GcalInfo,
   ReconciliationOptions,
   ReconciliationSummary,
   SyncStats,
-} from "../src/google-calendar";
-import { DEFAULT_MAX_CHANGES_PER_SYNC } from "../src/google-calendar";
-import GoogleCalendarSyncPlugin, { type PluginTimers } from "../src/main";
-import type { GoogleCalendarSyncSettings } from "../src/settings";
+} from "../src/gcal";
+import { DEFAULT_MAX_CHANGES_PER_SYNC } from "../src/gcal";
+import GcalSyncPlugin, { type PluginTimers } from "../src/main";
+import type { GcalSyncSettings } from "../src/settings";
 import { type GoogleEvent, planReconciliation } from "../src/sync-plan";
 
 const RuntimeTFile = TFile as unknown as new (path: string) => TFile;
@@ -23,7 +23,7 @@ function remoteKey(sourceKey: string): string {
   return makeRemoteSourceKey(VAULT_ID, sourceKey);
 }
 const MANIFEST = {
-  id: "obsidian-gcloud",
+  id: "gcal-sync",
   name: "Google Calendar Sync",
   version: "0.1.0",
   minAppVersion: "1.0.0",
@@ -131,7 +131,7 @@ class TestTimers implements PluginTimers {
   }
 }
 
-class InMemoryGateway implements GoogleCalendarGateway {
+class InMemoryGateway implements GcalGateway {
   private createdId = 0;
   private completed = 0;
   private events: GoogleEvent[];
@@ -177,11 +177,11 @@ class InMemoryGateway implements GoogleCalendarGateway {
     };
   }
 
-  async listWritableCalendars(): Promise<GoogleCalendarInfo[]> {
+  async listWritableCalendars(): Promise<GcalInfo[]> {
     return [];
   }
 
-  async createCalendar(summary: string): Promise<GoogleCalendarInfo> {
+  async createCalendar(summary: string): Promise<GcalInfo> {
     return { id: "created-calendar", name: summary, primary: false };
   }
 
@@ -210,7 +210,7 @@ class InMemoryGateway implements GoogleCalendarGateway {
   }
 }
 
-class BlockingGateway implements GoogleCalendarGateway {
+class BlockingGateway implements GcalGateway {
   starts = 0;
   completions = 0;
   active = 0;
@@ -240,11 +240,11 @@ class BlockingGateway implements GoogleCalendarGateway {
     return { created: 0, updated: 0, deleted: 0, unchanged: 0, deferredDeletes: 0 };
   }
 
-  async listWritableCalendars(): Promise<GoogleCalendarInfo[]> {
+  async listWritableCalendars(): Promise<GcalInfo[]> {
     return [];
   }
 
-  async createCalendar(summary: string): Promise<GoogleCalendarInfo> {
+  async createCalendar(summary: string): Promise<GcalInfo> {
     return { id: "created-calendar", name: summary, primary: false };
   }
 
@@ -341,11 +341,11 @@ const KNOWN_SOURCE_KEYS = new Map(
 );
 
 function setup(
-  gateway: GoogleCalendarGateway,
-  storedSettings: Partial<GoogleCalendarSyncSettings> = {},
+  gateway: GcalGateway,
+  storedSettings: Partial<GcalSyncSettings> = {},
   confirmPlan?: (summary: ReconciliationSummary) => Promise<boolean>,
 ): {
-  plugin: GoogleCalendarSyncPlugin;
+  plugin: GcalSyncPlugin;
   vault: TestVault;
   workspace: TestWorkspace;
   timers: TestTimers;
@@ -367,7 +367,7 @@ function setup(
       },
     },
   } as unknown as App;
-  const plugin = new GoogleCalendarSyncPlugin(app, MANIFEST, {
+  const plugin = new GcalSyncPlugin(app, MANIFEST, {
     createCalendarGateway: () => gateway,
     timers,
     ...(confirmPlan ? { confirmPlan } : {}),

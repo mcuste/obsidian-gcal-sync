@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Server, ServerResponse } from "node:http";
 import { createServer } from "node:http";
-import { exchangeAuthorizationCode } from "./google-calendar";
+import { exchangeAuthorizationCode } from "./gcal";
 
 const AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 export const GOOGLE_AUTHORIZATION_VERSION = 1;
@@ -10,7 +10,9 @@ const CALENDAR_SCOPES = [
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
   "https://www.googleapis.com/auth/calendar.app.created",
 ];
-const AUTHORIZATION_TIMEOUT_MS = 5 * 60 * 1000;
+/** How long the loopback listener waits for Google before giving up. */
+export const AUTHORIZATION_TIMEOUT_MS = 2 * 60 * 1000;
+export const AUTHORIZATION_CANCELLED_MESSAGE = "Google authorization was cancelled";
 
 export interface GoogleAuthorizationDependencies {
   openExternal(url: string): void;
@@ -26,9 +28,14 @@ export async function authorizeGoogle(
   input: {
     clientId: string;
     clientSecret?: string;
+    /** Abort to stop waiting and close the loopback listener straight away. */
+    signal?: AbortSignal;
   },
   dependencies: GoogleAuthorizationDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<string> {
+  const { signal, ...credentials } = input;
+  if (signal?.aborted) throw new Error(AUTHORIZATION_CANCELLED_MESSAGE);
+
   const state = randomBytes(24).toString("base64url");
   const verifier = randomBytes(48).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -40,7 +47,7 @@ export async function authorizeGoogle(
     const authorizationUrl = new URL(AUTHORIZATION_ENDPOINT);
     authorizationUrl.search = new URLSearchParams({
       access_type: "offline",
-      client_id: input.clientId,
+      client_id: credentials.clientId,
       code_challenge: challenge,
       code_challenge_method: "S256",
       include_granted_scopes: "true",
@@ -53,9 +60,9 @@ export async function authorizeGoogle(
 
     const codePromise = waitForAuthorizationCode(server, state);
     dependencies.openExternal(authorizationUrl.toString());
-    const code = await withTimeout(codePromise, AUTHORIZATION_TIMEOUT_MS);
+    const code = await withDeadline(codePromise, AUTHORIZATION_TIMEOUT_MS, signal);
     return await dependencies.exchangeCode({
-      ...input,
+      ...credentials,
       code,
       codeVerifier: verifier,
       redirectUri,
@@ -129,15 +136,24 @@ async function close(server: Server): Promise<void> {
   await promise;
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  const timeoutResult = Promise.withResolvers<T>();
+/** Resolves with the callback result, or rejects once the deadline passes or the caller aborts. */
+async function withDeadline<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  const stopped = Promise.withResolvers<T>();
   const timeout = setTimeout(
-    () => timeoutResult.reject(new Error("Google authorization timed out")),
+    () => stopped.reject(new Error("Google authorization timed out")),
     timeoutMs,
   );
+  const cancel = (): void => stopped.reject(new Error(AUTHORIZATION_CANCELLED_MESSAGE));
+  signal?.addEventListener("abort", cancel, { once: true });
+
   try {
-    return await Promise.race([promise, timeoutResult.promise]);
+    return await Promise.race([promise, stopped.promise]);
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener("abort", cancel);
   }
 }

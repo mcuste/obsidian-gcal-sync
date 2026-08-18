@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { VaultCalendarEvent } from "../src/event-parser";
 import {
-  GoogleCalendarClient,
+  GcalClient,
   type GoogleHttpRequest,
   type GoogleHttpResponse,
   type GoogleTransport,
@@ -10,7 +10,7 @@ import {
   RECONCILIATION_DELETE_APPROVAL_THRESHOLD,
   type ReconciliationSummary,
   revokeGoogleAuthorization,
-} from "../src/google-calendar";
+} from "../src/gcal";
 
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const REVOCATION_ENDPOINT = "https://oauth2.googleapis.com/revoke";
@@ -54,8 +54,8 @@ function requestBody(request: GoogleHttpRequest): Record<string, unknown> {
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
-function client(transport: GoogleTransport, calendarId = "calendar-id"): GoogleCalendarClient {
-  return new GoogleCalendarClient(
+function client(transport: GoogleTransport, calendarId = "calendar-id"): GcalClient {
+  return new GcalClient(
     {
       clientId: "client-id",
       clientSecret: "client-secret",

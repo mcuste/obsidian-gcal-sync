@@ -1,22 +1,23 @@
 import {
   type App,
+  type ButtonComponent,
   type DropdownComponent,
   Notice,
   PluginSettingTab,
   SecretComponent,
   Setting,
 } from "obsidian";
+import { DEFAULT_MAX_CHANGES_PER_SYNC, type GcalInfo, revokeGoogleAuthorization } from "./gcal";
 import {
-  DEFAULT_MAX_CHANGES_PER_SYNC,
-  type GoogleCalendarInfo,
-  revokeGoogleAuthorization,
-} from "./google-calendar";
-import { authorizeGoogle, GOOGLE_AUTHORIZATION_VERSION } from "./google-oauth";
-import type GoogleCalendarSyncPlugin from "./main";
+  AUTHORIZATION_TIMEOUT_MS,
+  authorizeGoogle,
+  GOOGLE_AUTHORIZATION_VERSION,
+} from "./gcal-oauth";
+import type GcalSyncPlugin from "./main";
 
 const GOOGLE_PERMISSIONS_URL = "https://myaccount.google.com/permissions";
 
-export interface GoogleCalendarSyncSettings {
+export interface GcalSyncSettings {
   calendarId: string;
   clientIdSecret: string;
   clientSecretSecret: string;
@@ -31,7 +32,7 @@ export interface GoogleCalendarSyncSettings {
   maxChangesPerSync: number;
 }
 
-export function defaultSettings(vaultId: string): GoogleCalendarSyncSettings {
+export function defaultSettings(vaultId: string): GcalSyncSettings {
   return {
     calendarId: "primary",
     clientIdSecret: "",
@@ -39,11 +40,21 @@ export function defaultSettings(vaultId: string): GoogleCalendarSyncSettings {
     refreshTokenSecret: "",
     googleAuthorizationVersion: 0,
     syncIntervalMinutes: 15,
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timeZone: "",
     vaultId,
     syncFolders: [],
     maxChangesPerSync: DEFAULT_MAX_CHANGES_PER_SYNC,
   };
+}
+
+/** The zone this device is in, which an empty Event time zone setting follows. */
+export function systemTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+/** The zone a start with no UTC offset is read in. Empty means follow this device. */
+export function resolveTimeZone(timeZone: string): string {
+  return timeZone || systemTimeZone();
 }
 
 /** Normalizes one folder per line into vault-relative paths without surrounding slashes. */
@@ -55,12 +66,20 @@ export function parseSyncFolders(value: string): string[] {
   return Array.from(new Set(folders));
 }
 
-export class GoogleCalendarSettingTab extends PluginSettingTab {
+export class GcalSettingTab extends PluginSettingTab {
+  private authorization: AbortController | undefined;
+  private countdownTimer: number | undefined;
+
   constructor(
     app: App,
-    private readonly plugin: GoogleCalendarSyncPlugin,
+    private readonly plugin: GcalSyncPlugin,
   ) {
     super(app, plugin);
+  }
+
+  /** Leaving the tab abandons any half-finished sign-in rather than leaving a listener open. */
+  override hide(): void {
+    this.cancelAuthorization();
   }
 
   override display(): void {
@@ -96,22 +115,18 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
       .setDesc(
         "Grants event, calendar-list, and calendar-creation access, then saves the refresh token in Obsidian SecretStorage.",
       )
-      .addButton((button) =>
-        button
-          .setButtonText(this.plugin.settings.refreshTokenSecret ? "Authorize again" : "Authorize")
-          .setCta()
-          .onClick(async () => {
-            button.setDisabled(true).setButtonText("Waiting for Google…");
-            try {
-              await this.authorize();
-              new Notice("Google Calendar authorization saved");
-              this.display();
-            } catch (error) {
-              new Notice(errorMessage(error), 10_000);
-              button.setDisabled(false).setButtonText("Authorize");
-            }
-          }),
-      );
+      .addButton((button) => {
+        this.resetAuthorizeButton(button);
+        button.onClick(async () => {
+          // While a sign-in is in flight the same button cancels it, so a browser tab the user
+          // closed or never finished does not leave the setting stuck until the deadline.
+          if (this.authorization) {
+            this.cancelAuthorization();
+            return;
+          }
+          await this.runAuthorization(button);
+        });
+      });
 
     if (this.plugin.settings.refreshTokenSecret) {
       new Setting(this.containerEl)
@@ -145,14 +160,20 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
 
     new Setting(this.containerEl)
       .setName("Event time zone")
-      .setDesc("IANA time zone used for timed and recurring events, such as America/New_York.")
+      .setDesc(
+        `IANA time zone for starts written without a UTC offset, such as America/New_York. ` +
+          `Leave empty to follow this device, currently ${systemTimeZone()}.`,
+      )
       .addText((text) =>
-        text.setValue(this.plugin.settings.timeZone).onChange(async (value) => {
-          const trimmed = value.trim();
-          if (!isTimeZone(trimmed)) return;
-          this.plugin.settings.timeZone = trimmed;
-          await this.plugin.saveSettings();
-        }),
+        text
+          .setPlaceholder(systemTimeZone())
+          .setValue(this.plugin.settings.timeZone)
+          .onChange(async (value) => {
+            const trimmed = value.trim();
+            if (trimmed && !isTimeZone(trimmed)) return;
+            this.plugin.settings.timeZone = trimmed;
+            await this.plugin.saveSettings();
+          }),
       );
 
     new Setting(this.containerEl)
@@ -215,10 +236,12 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
 
     new Setting(this.containerEl).setName("Event syntax").setHeading();
     new Setting(this.containerEl).setDesc(
-      "Inline: Meeting #gcal:2026-08-18T14:00:00-04:00/PT1H. " +
-        "Note property: gcal: 2026-08-18. Recurrence: #gcal-repeat:weekly, " +
-        "#gcal-repeat:monday-thursday, or an RRULE. Add #gcal-id:stable-name to keep " +
-        "an inline event stable when lines move. Timed values require Z or a UTC offset.",
+      "Inline: Meeting #gcal:2026-08-18T14:00/PT1H. Note property: gcal: 2026-08-18. " +
+        "A date alone is all-day (#gcal:2026-08-18). A time alone means today " +
+        "(#gcal:14:00). Times with no offset use the event time zone above; add Z or an " +
+        "offset to pin an exact instant. Duration follows a slash and defaults to one hour. " +
+        "Recurrence: #gcal-repeat:weekly, #gcal-repeat:monday-thursday, or an RRULE. " +
+        "Add #gcal-id:stable-name to keep an inline event stable when lines move.",
     );
 
     new Setting(this.containerEl).setName("Trust model").setHeading();
@@ -333,7 +356,7 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
 
   private populateCalendarDropdown(
     dropdown: DropdownComponent,
-    calendars: GoogleCalendarInfo[],
+    calendars: GcalInfo[],
     selectedId: string,
   ): void {
     dropdown.selectEl.empty();
@@ -350,13 +373,58 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
     dropdown.setValue(selectedId).setDisabled(false);
   }
 
-  private async authorize(): Promise<void> {
+  private async runAuthorization(button: ButtonComponent): Promise<void> {
+    const controller = new AbortController();
+    this.authorization = controller;
+    button.removeCta();
+    this.startCountdown(button);
+
+    try {
+      await this.authorize(controller.signal);
+      this.finishAuthorization(button);
+      new Notice("Google Calendar authorization saved");
+      this.display();
+    } catch (error) {
+      this.finishAuthorization(button);
+      new Notice(errorMessage(error), 10_000);
+    }
+  }
+
+  /** Counts the sign-in deadline down on the button so the wait has a visible end. */
+  private startCountdown(button: ButtonComponent): void {
+    const deadline = Date.now() + AUTHORIZATION_TIMEOUT_MS;
+    const render = (): void => {
+      button.setButtonText(`Cancel (${formatRemaining(deadline - Date.now())})`);
+    };
+    render();
+    this.countdownTimer = window.setInterval(render, 1_000);
+  }
+
+  private cancelAuthorization(): void {
+    this.authorization?.abort();
+    this.authorization = undefined;
+    if (this.countdownTimer !== undefined) window.clearInterval(this.countdownTimer);
+    this.countdownTimer = undefined;
+  }
+
+  private finishAuthorization(button: ButtonComponent): void {
+    this.cancelAuthorization();
+    this.resetAuthorizeButton(button);
+  }
+
+  private resetAuthorizeButton(button: ButtonComponent): void {
+    button
+      .setButtonText(this.plugin.settings.refreshTokenSecret ? "Authorize again" : "Authorize")
+      .setCta();
+  }
+
+  private async authorize(signal: AbortSignal): Promise<void> {
     const clientId = this.readSecret(this.plugin.settings.clientIdSecret, "OAuth client ID");
     const clientSecret = this.plugin.settings.clientSecretSecret
       ? this.readSecret(this.plugin.settings.clientSecretSecret, "OAuth client secret")
       : undefined;
-    const refreshToken = await authorizeGoogle({ clientId, clientSecret });
-    const secretId = `obsidian-gcloud-${this.plugin.settings.vaultId}-refresh-token`;
+    const refreshToken = await authorizeGoogle({ clientId, clientSecret, signal });
+    const secretId = `gcal-sync-${this.plugin.settings.vaultId}-refresh-token`;
     this.app.secretStorage.setSecret(secretId, refreshToken);
     this.plugin.settings.refreshTokenSecret = secretId;
     this.plugin.settings.googleAuthorizationVersion = GOOGLE_AUTHORIZATION_VERSION;
@@ -369,6 +437,13 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
     if (!value) throw new Error(`${label} secret is empty or missing`);
     return value;
   }
+}
+
+/** Formats a remaining duration as m:ss, floored at zero. */
+function formatRemaining(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  return `${minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
 }
 
 function isTimeZone(value: string): boolean {

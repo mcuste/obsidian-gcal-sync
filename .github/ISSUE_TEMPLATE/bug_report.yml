@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [Troubleshooting](https://github.com/mcuste/obsidian-gcal-sync/blob/main/docs/troubleshooting.md) first.
+        Do not paste OAuth client IDs, client secrets, or tokens.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead. Include the notice text if there was one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: declaration
+    attributes:
+      label: Event declaration
+      description: The smallest note content that reproduces it.
+      render: markdown
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Plugin version, Obsidian version, and operating system.
+      placeholder: 0.1.0, Obsidian 1.11.5, macOS 15
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console output
+      description: Errors from the developer console, if any.
+      render: shell
