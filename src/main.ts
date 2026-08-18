@@ -1,8 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { type CachedMetadata, Notice, Plugin, TFile } from "obsidian";
+import {
+  type App,
+  type CachedMetadata,
+  Notice,
+  Plugin,
+  type PluginManifest,
+  TFile,
+} from "obsidian";
 import { type ParseIssue, parseVaultEvents, type VaultCalendarEvent } from "./event-parser";
 import {
   GoogleCalendarClient,
+  type GoogleCalendarGateway,
   type GoogleCalendarInfo,
   type GoogleCredentials,
   type SyncStats,
@@ -15,6 +23,29 @@ import {
 
 const CHANGE_DEBOUNCE_MS = 1_000;
 
+export interface PluginTimers {
+  setTimeout(callback: () => void, milliseconds: number): number;
+  clearTimeout(timer: number): void;
+  setInterval(callback: () => void, milliseconds: number): number;
+  clearInterval(timer: number): void;
+}
+
+export interface GoogleCalendarSyncPluginDependencies {
+  createCalendarGateway?(
+    credentials: GoogleCredentials,
+    calendarId: string,
+    vaultId: string,
+  ): GoogleCalendarGateway;
+  timers?: PluginTimers;
+}
+
+const WINDOW_TIMERS: PluginTimers = {
+  setTimeout: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
+  clearTimeout: (timer) => window.clearTimeout(timer),
+  setInterval: (callback, milliseconds) => window.setInterval(callback, milliseconds),
+  clearInterval: (timer) => window.clearInterval(timer),
+};
+
 export default class GoogleCalendarSyncPlugin extends Plugin {
   override settings: GoogleCalendarSyncSettings = defaultSettings("");
 
@@ -23,6 +54,23 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
   private changeTimer: number | undefined;
   private periodicTimer: number | undefined;
   private syncTail: Promise<void> = Promise.resolve();
+  private readonly createCalendarGateway: NonNullable<
+    GoogleCalendarSyncPluginDependencies["createCalendarGateway"]
+  >;
+  private readonly timers: PluginTimers;
+
+  constructor(
+    app: App,
+    manifest: PluginManifest,
+    dependencies: GoogleCalendarSyncPluginDependencies = {},
+  ) {
+    super(app, manifest);
+    this.createCalendarGateway =
+      dependencies.createCalendarGateway ??
+      ((credentials, calendarId, vaultId) =>
+        new GoogleCalendarClient(credentials, calendarId, vaultId));
+    this.timers = dependencies.timers ?? WINDOW_TIMERS;
+  }
 
   override async onload(): Promise<void> {
     await this.loadSettings();
@@ -62,8 +110,8 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
   }
 
   override onunload(): void {
-    if (this.changeTimer !== undefined) window.clearTimeout(this.changeTimer);
-    if (this.periodicTimer !== undefined) window.clearInterval(this.periodicTimer);
+    if (this.changeTimer !== undefined) this.timers.clearTimeout(this.changeTimer);
+    if (this.periodicTimer !== undefined) this.timers.clearInterval(this.periodicTimer);
   }
 
   async saveSettings(): Promise<void> {
@@ -71,9 +119,9 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
   }
 
   resetPeriodicSync(): void {
-    if (this.periodicTimer !== undefined) window.clearInterval(this.periodicTimer);
+    if (this.periodicTimer !== undefined) this.timers.clearInterval(this.periodicTimer);
     const milliseconds = this.settings.syncIntervalMinutes * 60 * 1000;
-    this.periodicTimer = window.setInterval(() => void this.syncNow(false), milliseconds);
+    this.periodicTimer = this.timers.setInterval(() => void this.syncNow(false), milliseconds);
   }
 
   async syncNow(showNotice: boolean): Promise<void> {
@@ -106,8 +154,8 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
   private schedulePath(path: string): void {
     this.pendingPaths.add(path);
-    if (this.changeTimer !== undefined) window.clearTimeout(this.changeTimer);
-    this.changeTimer = window.setTimeout(() => {
+    if (this.changeTimer !== undefined) this.timers.clearTimeout(this.changeTimer);
+    this.changeTimer = this.timers.setTimeout(() => {
       this.changeTimer = undefined;
       void this.flushPendingPaths();
     }, CHANGE_DEBOUNCE_MS);
@@ -191,7 +239,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
     return this.createClient().createCalendar(summary);
   }
 
-  private createClient(): GoogleCalendarClient {
+  private createClient(): GoogleCalendarGateway {
     const credentials: GoogleCredentials = {
       clientId: this.readSecret(this.settings.clientIdSecret, "OAuth client ID"),
       refreshToken: this.readSecret(this.settings.refreshTokenSecret, "refresh token"),
@@ -202,7 +250,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
         "OAuth client secret",
       );
     }
-    return new GoogleCalendarClient(credentials, this.settings.calendarId, this.settings.vaultId);
+    return this.createCalendarGateway(credentials, this.settings.calendarId, this.settings.vaultId);
   }
 
   private readSecret(secretId: string, label: string): string {

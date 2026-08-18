@@ -12,10 +12,23 @@ const CALENDAR_SCOPES = [
 ];
 const AUTHORIZATION_TIMEOUT_MS = 5 * 60 * 1000;
 
-export async function authorizeGoogle(input: {
-  clientId: string;
-  clientSecret?: string;
-}): Promise<string> {
+export interface GoogleAuthorizationDependencies {
+  openExternal(url: string): void;
+  exchangeCode(input: Parameters<typeof exchangeAuthorizationCode>[0]): Promise<string>;
+}
+
+const DEFAULT_DEPENDENCIES: GoogleAuthorizationDependencies = {
+  openExternal: (url) => window.open(url, "_blank", "noopener,noreferrer"),
+  exchangeCode: exchangeAuthorizationCode,
+};
+
+export async function authorizeGoogle(
+  input: {
+    clientId: string;
+    clientSecret?: string;
+  },
+  dependencies: GoogleAuthorizationDependencies = DEFAULT_DEPENDENCIES,
+): Promise<string> {
   const state = randomBytes(24).toString("base64url");
   const verifier = randomBytes(48).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -39,16 +52,16 @@ export async function authorizeGoogle(input: {
     }).toString();
 
     const codePromise = waitForAuthorizationCode(server, state);
-    window.open(authorizationUrl.toString(), "_blank", "noopener,noreferrer");
+    dependencies.openExternal(authorizationUrl.toString());
     const code = await withTimeout(codePromise, AUTHORIZATION_TIMEOUT_MS);
-    return await exchangeAuthorizationCode({
+    return await dependencies.exchangeCode({
       ...input,
       code,
       codeVerifier: verifier,
       redirectUri,
     });
   } finally {
-    server.close();
+    await close(server);
   }
 }
 
@@ -79,12 +92,17 @@ function waitForAuthorizationCode(server: Server, expectedState: string): Promis
     const error = url.searchParams.get("error");
     const state = url.searchParams.get("state");
     const code = url.searchParams.get("code");
+    if (state !== expectedState) {
+      respond(response, 400, "Invalid authorization response. You can close this tab.");
+      reject(new Error("Google returned an invalid OAuth callback"));
+      return;
+    }
     if (error) {
       respond(response, 400, "Google Calendar authorization was denied. You can close this tab.");
       reject(new Error(`Google authorization failed: ${error}`));
       return;
     }
-    if (state !== expectedState || !code) {
+    if (!code) {
       respond(response, 400, "Invalid authorization response. You can close this tab.");
       reject(new Error("Google returned an invalid OAuth callback"));
       return;
@@ -99,6 +117,16 @@ function waitForAuthorizationCode(server: Server, expectedState: string): Promis
 function respond(response: ServerResponse, status: number, message: string): void {
   response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
   response.end(message);
+}
+
+async function close(server: Server): Promise<void> {
+  if (!server.listening) return;
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  server.close((error) => {
+    if (error) reject(error);
+    else resolve();
+  });
+  await promise;
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

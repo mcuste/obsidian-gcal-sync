@@ -91,3 +91,82 @@ test("updates when a recurrence changes", () => {
     ["event-id"],
   );
 });
+
+test("ignores remote events without managed source metadata", () => {
+  const plan = planReconciliation(
+    [],
+    [
+      {
+        id: "unmanaged-id",
+        summary: "Personal event",
+        start: { date: "2026-08-18" },
+        end: { date: "2026-08-19" },
+      },
+    ],
+  );
+
+  assert.deepEqual(plan, { creates: [], updates: [], deletes: [], unchanged: 0 });
+});
+
+test("fails safely when an actionable remote event has no ID", () => {
+  assert.throws(
+    () => planReconciliation([desired("changed", "Changed")], [remote("", "changed", "Old title")]),
+    /event without an ID/,
+  );
+  assert.throws(
+    () => planReconciliation([], [remote("", "stale", "Stale")]),
+    /event without an ID/,
+  );
+});
+
+test("compares all-day start and end dates", () => {
+  const expected: VaultCalendarEvent = {
+    ...desired("all-day", "All day"),
+    start: { date: "2026-08-18" },
+    end: { date: "2026-08-19" },
+    recurrence: undefined,
+  };
+
+  const same = planReconciliation(
+    [expected],
+    [
+      remote("all-day-id", "all-day", "All day", {
+        start: { date: "2026-08-18" },
+        end: { date: "2026-08-19" },
+        recurrence: undefined,
+      }),
+    ],
+  );
+  const changed = planReconciliation(
+    [expected],
+    [
+      remote("all-day-id", "all-day", "All day", {
+        start: { date: "2026-08-18" },
+        end: { date: "2026-08-20" },
+        recurrence: undefined,
+      }),
+    ],
+  );
+
+  assert.equal(same.unchanged, 1);
+  assert.deepEqual(
+    changed.updates.map((update) => update.eventId),
+    ["all-day-id"],
+  );
+});
+
+test("updates a remote recurrence when the declaration removes it", () => {
+  const expected: VaultCalendarEvent = {
+    ...desired("event", "Event"),
+    recurrence: undefined,
+  };
+  const plan = planReconciliation(
+    [expected],
+    [remote("event-id", "event", "Event", { recurrence: ["RRULE:FREQ=WEEKLY"] })],
+  );
+
+  assert.deepEqual(
+    plan.updates.map((update) => update.eventId),
+    ["event-id"],
+  );
+});

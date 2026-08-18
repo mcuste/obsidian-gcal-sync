@@ -12,6 +12,23 @@ export interface GoogleCredentials {
   refreshToken: string;
 }
 
+export interface GoogleHttpRequest {
+  url: string;
+  method?: string;
+  contentType?: string;
+  body?: string | ArrayBuffer;
+  headers?: Record<string, string>;
+  throw?: boolean;
+}
+
+export interface GoogleHttpResponse {
+  status: number;
+  json: unknown;
+  text: string;
+}
+
+export type GoogleTransport = (request: GoogleHttpRequest) => Promise<GoogleHttpResponse>;
+
 export interface SyncStats {
   created: number;
   updated: number;
@@ -23,6 +40,15 @@ export interface GoogleCalendarInfo {
   id: string;
   name: string;
   primary: boolean;
+}
+
+export interface GoogleCalendarGateway {
+  reconcile(
+    desiredEvents: Iterable<VaultCalendarEvent>,
+    affectedSourceKeys?: ReadonlySet<string>,
+  ): Promise<SyncStats>;
+  listWritableCalendars(): Promise<GoogleCalendarInfo[]>;
+  createCalendar(summary: string): Promise<GoogleCalendarInfo>;
 }
 
 interface GoogleCalendarList {
@@ -64,18 +90,19 @@ interface EventBody {
   };
 }
 
-export class GoogleCalendarClient {
+export class GoogleCalendarClient implements GoogleCalendarGateway {
   constructor(
     private readonly credentials: GoogleCredentials,
     private readonly calendarId: string,
     private readonly vaultId: string,
+    private readonly transport: GoogleTransport = requestUrl,
   ) {}
 
   async reconcile(
     desiredEvents: Iterable<VaultCalendarEvent>,
     affectedSourceKeys?: ReadonlySet<string>,
   ): Promise<SyncStats> {
-    const accessToken = await refreshAccessToken(this.credentials);
+    const accessToken = await refreshAccessToken(this.credentials, this.transport);
     const remoteEvents = await this.listManagedEvents(accessToken);
     const plan = planReconciliation(desiredEvents, remoteEvents, affectedSourceKeys);
 
@@ -94,7 +121,7 @@ export class GoogleCalendarClient {
   }
 
   async listWritableCalendars(): Promise<GoogleCalendarInfo[]> {
-    const accessToken = await refreshAccessToken(this.credentials);
+    const accessToken = await refreshAccessToken(this.credentials, this.transport);
     const calendars: GoogleCalendarInfo[] = [];
     let pageToken: string | undefined;
     do {
@@ -131,7 +158,7 @@ export class GoogleCalendarClient {
     const normalizedSummary = summary.trim();
     if (!normalizedSummary) throw new Error("Calendar name is required");
 
-    const accessToken = await refreshAccessToken(this.credentials);
+    const accessToken = await refreshAccessToken(this.credentials, this.transport);
     const calendar = await this.request<GoogleCalendarResource>(accessToken, "POST", "/calendars", {
       summary: normalizedSummary,
     });
@@ -194,7 +221,7 @@ export class GoogleCalendarClient {
   }
 
   private async deleteEvent(accessToken: string, eventId: string): Promise<void> {
-    const response = await requestUrl({
+    const response = await this.transport({
       url: `${CALENDAR_API}/calendars/${encodeURIComponent(this.calendarId)}/events/${encodeURIComponent(eventId)}`,
       method: "DELETE",
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -227,7 +254,7 @@ export class GoogleCalendarClient {
     path: string,
     body?: unknown,
   ): Promise<T> {
-    const response = await requestUrl({
+    const response = await this.transport({
       url: `${CALENDAR_API}${path}`,
       method,
       contentType: body === undefined ? undefined : "application/json",
@@ -242,13 +269,16 @@ export class GoogleCalendarClient {
   }
 }
 
-export async function exchangeAuthorizationCode(input: {
-  clientId: string;
-  clientSecret?: string;
-  code: string;
-  codeVerifier: string;
-  redirectUri: string;
-}): Promise<string> {
+export async function exchangeAuthorizationCode(
+  input: {
+    clientId: string;
+    clientSecret?: string;
+    code: string;
+    codeVerifier: string;
+    redirectUri: string;
+  },
+  transport: GoogleTransport = requestUrl,
+): Promise<string> {
   const form = new URLSearchParams({
     client_id: input.clientId,
     code: input.code,
@@ -257,7 +287,7 @@ export async function exchangeAuthorizationCode(input: {
     redirect_uri: input.redirectUri,
   });
   if (input.clientSecret) form.set("client_secret", input.clientSecret);
-  const response = await requestUrl({
+  const response = await transport({
     url: TOKEN_ENDPOINT,
     method: "POST",
     contentType: "application/x-www-form-urlencoded",
@@ -276,14 +306,17 @@ export async function exchangeAuthorizationCode(input: {
   return token.refresh_token;
 }
 
-async function refreshAccessToken(credentials: GoogleCredentials): Promise<string> {
+async function refreshAccessToken(
+  credentials: GoogleCredentials,
+  transport: GoogleTransport,
+): Promise<string> {
   const form = new URLSearchParams({
     client_id: credentials.clientId,
     grant_type: "refresh_token",
     refresh_token: credentials.refreshToken,
   });
   if (credentials.clientSecret) form.set("client_secret", credentials.clientSecret);
-  const response = await requestUrl({
+  const response = await transport({
     url: TOKEN_ENDPOINT,
     method: "POST",
     contentType: "application/x-www-form-urlencoded",

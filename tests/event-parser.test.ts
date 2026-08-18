@@ -98,3 +98,41 @@ test("returns no events when any declaration in a note is invalid", () => {
   assert.equal(result.issues.length, 1);
   assert.equal(result.issues[0]?.location, "line 2");
 });
+
+test("duplicate explicit IDs invalidate every declaration in the note", () => {
+  const result = parseVaultEvents({
+    path: "Duplicate.md",
+    basename: "Duplicate",
+    content: "First #gcal:2026-08-18 #gcal-id:shared\nSecond #gcal:2026-08-19 #gcal-id:shared",
+    timeZone: "UTC",
+  });
+
+  assert.deepEqual(result.events, []);
+  assert.deepEqual(
+    result.issues.map((issue) => issue.message),
+    ["Duplicate gcal ID in this note"],
+  );
+});
+
+test("invalid durations and weekday ranges invalidate the note", () => {
+  const result = parseVaultEvents({
+    path: "Invalid.md",
+    basename: "Invalid",
+    content: [
+      "Zero #gcal:2026-08-18T09:00:00Z/PT0S",
+      "Malformed #gcal:2026-08-18T09:00:00Z/P1H",
+      "Range #gcal:2026-08-18 #gcal-repeat:friday-monday",
+    ].join("\n"),
+    timeZone: "UTC",
+  });
+
+  assert.deepEqual(result.events, []);
+  assert.deepEqual(
+    result.issues.map((issue) => issue.message),
+    [
+      "Event duration must be greater than zero",
+      "Invalid ISO 8601 duration",
+      "Invalid recurring weekday range",
+    ],
+  );
+});

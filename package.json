@@ -14,7 +14,7 @@
     "lint": "biome lint .",
     "quality": "biome check .",
     "security": "pnpm audit --audit-level high",
-    "test": "tsx --test tests/**/*.test.ts"
+    "test": "tsx --tsconfig tests/tsconfig.json --test tests/**/*.test.ts"
   },
   "engines": {
     "node": ">=22"
@@ -30,7 +30,8 @@
   },
   "knip": {
     "entry": [
-      "tests/**/*.test.ts"
+      "tests/**/*.test.ts",
+      "tests/obsidian-stub.ts"
     ],
     "project": [
       "src/**/*.ts",
