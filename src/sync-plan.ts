@@ -22,17 +22,17 @@ export interface ReconciliationPlan {
 export function planReconciliation(
   desiredEvents: Iterable<VaultCalendarEvent>,
   remoteEvents: GoogleEvent[],
-  affectedSourceKeys?: ReadonlySet<string>
+  affectedSourceKeys?: ReadonlySet<string>,
 ): ReconciliationPlan {
   const desiredByKey = new Map(
-    Array.from(desiredEvents, (event) => [event.sourceKey, event] as const)
+    Array.from(desiredEvents, (event) => [event.sourceKey, event] as const),
   );
   const remoteByKey = groupRemoteEvents(remoteEvents);
   const plan: ReconciliationPlan = {
     creates: [],
     updates: [],
     deletes: [],
-    unchanged: 0
+    unchanged: 0,
   };
 
   for (const [sourceKey, desired] of desiredByKey) {
@@ -81,10 +81,7 @@ function eventsEqual(remote: GoogleEvent, desired: VaultCalendarEvent): boolean 
   );
 }
 
-function dateTimesEqual(
-  first: CalendarDateTime | undefined,
-  second: CalendarDateTime
-): boolean {
+function dateTimesEqual(first: CalendarDateTime | undefined, second: CalendarDateTime): boolean {
   if (!first) return false;
   if (first.date || second.date) return first.date === second.date;
   if (!first.dateTime || !second.dateTime) return false;

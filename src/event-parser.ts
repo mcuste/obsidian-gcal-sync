@@ -54,7 +54,7 @@ const DAY_CODES: Record<string, string> = {
   saturday: "SA",
   sat: "SA",
   sunday: "SU",
-  sun: "SU"
+  sun: "SU",
 };
 const ORDERED_DAY_NAMES = [
   "monday",
@@ -63,7 +63,7 @@ const ORDERED_DAY_NAMES = [
   "thursday",
   "friday",
   "saturday",
-  "sunday"
+  "sunday",
 ];
 
 export function parseVaultEvents(options: ParseFileOptions): ParseResult {
@@ -77,7 +77,7 @@ export function parseVaultEvents(options: ParseFileOptions): ParseResult {
       result.issues.push({
         sourcePath: options.path,
         location: event.sourceKey,
-        message: "Duplicate gcal ID in this note"
+        message: "Duplicate gcal ID in this note",
       });
     }
     keys.add(event.sourceKey);
@@ -104,7 +104,7 @@ function parseFrontmatter(options: ParseFileOptions, result: ParseResult): void 
       repeat,
       summary: options.basename,
       sourceKey: makeSourceKey(options.path, id ?? `frontmatter-${index + 1}`),
-      location: `frontmatter gcal${rawEvents.length > 1 ? `[${index}]` : ""}`
+      location: `frontmatter gcal${rawEvents.length > 1 ? `[${index}]` : ""}`,
     });
   });
 }
@@ -132,7 +132,7 @@ function parseLines(options: ParseFileOptions, result: ParseResult): void {
         repeat,
         summary: prefix || options.basename,
         sourceKey: makeSourceKey(options.path, locator),
-        location: `line ${lineIndex + 1}`
+        location: `line ${lineIndex + 1}`,
       });
     }
   });
@@ -147,7 +147,7 @@ function addEvent(
     summary: string;
     sourceKey: string;
     location: string;
-  }
+  },
 ): void {
   try {
     const schedule = parseSchedule(input.raw, options.timeZone);
@@ -158,20 +158,20 @@ function addEvent(
       summary: input.summary,
       start: schedule.start,
       end: schedule.end,
-      recurrence
+      recurrence,
     });
   } catch (error) {
     result.issues.push({
       sourcePath: options.path,
       location: input.location,
-      message: error instanceof Error ? error.message : String(error)
+      message: error instanceof Error ? error.message : String(error),
     });
   }
 }
 
 export function parseSchedule(
   raw: string,
-  timeZone: string
+  timeZone: string,
 ): { start: CalendarDateTime; end: CalendarDateTime } {
   const separator = raw.indexOf("/");
   const startValue = separator === -1 ? raw : raw.slice(0, separator);
@@ -183,14 +183,12 @@ export function parseSchedule(
     const durationDays = durationValue ? parseAllDayDuration(durationValue) : 1;
     return {
       start: { date: startValue },
-      end: { date: addUtcDays(startValue, durationDays) }
+      end: { date: addUtcDays(startValue, durationDays) },
     };
   }
 
   if (!DATE_TIME.test(startValue)) {
-    throw new Error(
-      "Expected YYYY-MM-DD or an RFC 3339 timestamp with Z or a UTC offset"
-    );
+    throw new Error("Expected YYYY-MM-DD or an RFC 3339 timestamp with Z or a UTC offset");
   }
   assertValidCalendarDate(startValue.slice(0, 10));
 
@@ -200,12 +198,15 @@ export function parseSchedule(
 
   return {
     start: { dateTime: startValue, timeZone },
-    end: { dateTime: new Date(startMs + durationMs).toISOString(), timeZone }
+    end: { dateTime: new Date(startMs + durationMs).toISOString(), timeZone },
   };
 }
 
 export function normalizeRecurrence(value: string): string {
-  const normalized = value.trim().toLowerCase().replace(/^every-/, "");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/^every-/, "");
   if (normalized === "daily") return "RRULE:FREQ=DAILY";
   if (normalized === "weekly") return "RRULE:FREQ=WEEKLY";
   if (normalized === "weekdays") {
@@ -221,9 +222,7 @@ export function normalizeRecurrence(value: string): string {
     if (firstIndex === -1 || lastIndex < firstIndex) {
       throw new Error("Invalid recurring weekday range");
     }
-    const days = ORDERED_DAY_NAMES.slice(firstIndex, lastIndex + 1).map(
-      (day) => DAY_CODES[day]
-    );
+    const days = ORDERED_DAY_NAMES.slice(firstIndex, lastIndex + 1).map((day) => DAY_CODES[day]);
     return `RRULE:FREQ=WEEKLY;BYDAY=${days.join(",")}`;
   }
 

@@ -1,10 +1,15 @@
 import { createHash, randomBytes } from "node:crypto";
-import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import { exchangeAuthorizationCode } from "./google-calendar";
 
 const AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
-const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+export const GOOGLE_AUTHORIZATION_VERSION = 1;
+const CALENDAR_SCOPES = [
+  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+  "https://www.googleapis.com/auth/calendar.app.created",
+];
 const AUTHORIZATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 export async function authorizeGoogle(input: {
@@ -29,8 +34,8 @@ export async function authorizeGoogle(input: {
       prompt: "consent",
       redirect_uri: redirectUri,
       response_type: "code",
-      scope: CALENDAR_SCOPE,
-      state
+      scope: CALENDAR_SCOPES.join(" "),
+      state,
     }).toString();
 
     const codePromise = waitForAuthorizationCode(server, state);
@@ -40,7 +45,7 @@ export async function authorizeGoogle(input: {
       ...input,
       code,
       codeVerifier: verifier,
-      redirectUri
+      redirectUri,
     });
   } finally {
     server.close();
@@ -100,7 +105,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   const timeoutResult = Promise.withResolvers<T>();
   const timeout = setTimeout(
     () => timeoutResult.reject(new Error("Google authorization timed out")),
-    timeoutMs
+    timeoutMs,
   );
   try {
     return await Promise.race([promise, timeoutResult.promise]);

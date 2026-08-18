@@ -1,11 +1,13 @@
 import {
-  App,
+  type App,
+  type DropdownComponent,
   Notice,
   PluginSettingTab,
   SecretComponent,
-  Setting
+  Setting,
 } from "obsidian";
-import { authorizeGoogle } from "./google-oauth";
+import type { GoogleCalendarInfo } from "./google-calendar";
+import { authorizeGoogle, GOOGLE_AUTHORIZATION_VERSION } from "./google-oauth";
 import type GoogleCalendarSyncPlugin from "./main";
 
 export interface GoogleCalendarSyncSettings {
@@ -13,6 +15,7 @@ export interface GoogleCalendarSyncSettings {
   clientIdSecret: string;
   clientSecretSecret: string;
   refreshTokenSecret: string;
+  googleAuthorizationVersion: number;
   syncIntervalMinutes: number;
   timeZone: string;
   vaultId: string;
@@ -24,14 +27,18 @@ export function defaultSettings(vaultId: string): GoogleCalendarSyncSettings {
     clientIdSecret: "",
     clientSecretSecret: "",
     refreshTokenSecret: "",
+    googleAuthorizationVersion: 0,
     syncIntervalMinutes: 15,
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    vaultId
+    vaultId,
   };
 }
 
 export class GoogleCalendarSettingTab extends PluginSettingTab {
-  constructor(app: App, private readonly plugin: GoogleCalendarSyncPlugin) {
+  constructor(
+    app: App,
+    private readonly plugin: GoogleCalendarSyncPlugin,
+  ) {
     super(app, plugin);
   }
 
@@ -48,7 +55,7 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.clientIdSecret = value;
             await this.plugin.saveSettings();
-          })
+          }),
       );
 
     new Setting(this.containerEl)
@@ -60,17 +67,17 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.clientSecretSecret = value;
             await this.plugin.saveSettings();
-          })
+          }),
       );
 
     new Setting(this.containerEl)
       .setName("Google authorization")
-      .setDesc("Opens Google in your browser and saves the returned refresh token in Obsidian SecretStorage.")
+      .setDesc(
+        "Grants event, calendar-list, and calendar-creation access, then saves the refresh token in Obsidian SecretStorage.",
+      )
       .addButton((button) =>
         button
-          .setButtonText(
-            this.plugin.settings.refreshTokenSecret ? "Authorize again" : "Authorize"
-          )
+          .setButtonText(this.plugin.settings.refreshTokenSecret ? "Authorize again" : "Authorize")
           .setCta()
           .onClick(async () => {
             button.setDisabled(true).setButtonText("Waiting for Google…");
@@ -82,22 +89,11 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
               new Notice(errorMessage(error), 10_000);
               button.setDisabled(false).setButtonText("Authorize");
             }
-          })
+          }),
       );
 
     new Setting(this.containerEl).setName("Calendar sync").setHeading();
-    new Setting(this.containerEl)
-      .setName("Calendar ID")
-      .setDesc("Use primary or a calendar ID from Google Calendar settings.")
-      .addText((text) =>
-        text
-          .setPlaceholder("primary")
-          .setValue(this.plugin.settings.calendarId)
-          .onChange(async (value) => {
-            this.plugin.settings.calendarId = value.trim() || "primary";
-            await this.plugin.saveSettings();
-          })
-      );
+    this.displayCalendarSettings();
 
     new Setting(this.containerEl)
       .setName("Event time zone")
@@ -108,22 +104,20 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
           if (!isTimeZone(trimmed)) return;
           this.plugin.settings.timeZone = trimmed;
           await this.plugin.saveSettings();
-        })
+        }),
       );
 
     new Setting(this.containerEl)
       .setName("Full scan interval")
       .setDesc("Minutes between full vault reconciliations. File changes sync incrementally.")
       .addText((text) =>
-        text
-          .setValue(String(this.plugin.settings.syncIntervalMinutes))
-          .onChange(async (value) => {
-            const minutes = Number.parseInt(value, 10);
-            if (!Number.isInteger(minutes) || minutes < 1) return;
-            this.plugin.settings.syncIntervalMinutes = minutes;
-            await this.plugin.saveSettings();
-            this.plugin.resetPeriodicSync();
-          })
+        text.setValue(String(this.plugin.settings.syncIntervalMinutes)).onChange(async (value) => {
+          const minutes = Number.parseInt(value, 10);
+          if (!Number.isInteger(minutes) || minutes < 1) return;
+          this.plugin.settings.syncIntervalMinutes = minutes;
+          await this.plugin.saveSettings();
+          this.plugin.resetPeriodicSync();
+        }),
       );
 
     new Setting(this.containerEl)
@@ -137,7 +131,7 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
           } finally {
             button.setDisabled(false);
           }
-        })
+        }),
       );
 
     new Setting(this.containerEl).setName("Event syntax").setHeading();
@@ -145,8 +139,113 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
       "Inline: Meeting #gcal:2026-08-18T14:00:00-04:00/PT1H. " +
         "Note property: gcal: 2026-08-18. Recurrence: #gcal-repeat:weekly, " +
         "#gcal-repeat:monday-thursday, or an RRULE. Add #gcal-id:stable-name to keep " +
-        "an inline event stable when lines move. Timed values require Z or a UTC offset."
+        "an inline event stable when lines move. Timed values require Z or a UTC offset.",
     );
+  }
+
+  private displayCalendarSettings(): void {
+    const selectedId = this.plugin.settings.calendarId;
+    const calendarSetting = new Setting(this.containerEl)
+      .setName("Calendar")
+      .setDesc("Authorize Google to load writable calendars.");
+
+    calendarSetting.addDropdown((dropdown) => {
+      dropdown
+        .addOption(selectedId, selectedId)
+        .setValue(selectedId)
+        .setDisabled(true)
+        .onChange(async (value) => {
+          this.plugin.settings.calendarId = value;
+          await this.plugin.saveSettings();
+        });
+      if (!this.plugin.settings.refreshTokenSecret) return;
+      if (this.plugin.settings.googleAuthorizationVersion < GOOGLE_AUTHORIZATION_VERSION) {
+        calendarSetting.setDesc(
+          "Authorize Google again to grant calendar selection and creation access.",
+        );
+        return;
+      }
+
+      calendarSetting.addButton((button) => {
+        const loadCalendars = async (): Promise<void> => {
+          button.setDisabled(true);
+          dropdown.setDisabled(true);
+          calendarSetting.setDesc("Loading writable calendars from Google…");
+          try {
+            const calendars = await this.plugin.listWritableCalendars();
+            this.populateCalendarDropdown(dropdown, calendars, selectedId);
+            calendarSetting.setDesc(
+              "Select a writable calendar. Changing calendars does not remove events from the previous calendar.",
+            );
+          } catch (error) {
+            calendarSetting.setDesc("Could not load calendars. Authorize Google again or retry.");
+            new Notice(errorMessage(error), 10_000);
+          } finally {
+            button.setDisabled(false);
+          }
+        };
+
+        button.setButtonText("Refresh").onClick(loadCalendars);
+        void loadCalendars();
+      });
+    });
+
+    if (
+      !this.plugin.settings.refreshTokenSecret ||
+      this.plugin.settings.googleAuthorizationVersion < GOOGLE_AUTHORIZATION_VERSION
+    ) {
+      return;
+    }
+
+    let calendarName = "";
+    new Setting(this.containerEl)
+      .setName("Create calendar")
+      .setDesc("Creates a secondary Google Calendar and selects it for future syncs.")
+      .addText((text) =>
+        text.setPlaceholder("Obsidian").onChange((value) => {
+          calendarName = value;
+        }),
+      )
+      .addButton((button) =>
+        button.setButtonText("Create").onClick(async () => {
+          const normalizedName = calendarName.trim();
+          if (!normalizedName) {
+            new Notice("Enter a calendar name");
+            return;
+          }
+
+          button.setDisabled(true).setButtonText("Creating…");
+          try {
+            const calendar = await this.plugin.createCalendar(normalizedName);
+            this.plugin.settings.calendarId = calendar.id;
+            await this.plugin.saveSettings();
+            new Notice(`Created and selected ${calendar.name}. Sync now to populate it.`);
+            this.display();
+          } catch (error) {
+            new Notice(errorMessage(error), 10_000);
+            button.setDisabled(false).setButtonText("Create");
+          }
+        }),
+      );
+  }
+
+  private populateCalendarDropdown(
+    dropdown: DropdownComponent,
+    calendars: GoogleCalendarInfo[],
+    selectedId: string,
+  ): void {
+    dropdown.selectEl.empty();
+    let selectedAvailable = false;
+    for (const calendar of calendars) {
+      const value = calendar.primary ? "primary" : calendar.id;
+      const label = calendar.primary ? `${calendar.name} (primary)` : calendar.name;
+      dropdown.addOption(value, label);
+      selectedAvailable ||= value === selectedId;
+    }
+    if (!selectedAvailable) {
+      dropdown.addOption(selectedId, `${selectedId} (configured, unavailable)`);
+    }
+    dropdown.setValue(selectedId).setDisabled(false);
   }
 
   private async authorize(): Promise<void> {
@@ -158,6 +257,7 @@ export class GoogleCalendarSettingTab extends PluginSettingTab {
     const secretId = `obsidian-gcloud-${this.plugin.settings.vaultId}-refresh-token`;
     this.app.secretStorage.setSecret(secretId, refreshToken);
     this.plugin.settings.refreshTokenSecret = secretId;
+    this.plugin.settings.googleAuthorizationVersion = GOOGLE_AUTHORIZATION_VERSION;
     await this.plugin.saveSettings();
   }
 

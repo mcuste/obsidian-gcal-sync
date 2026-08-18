@@ -5,19 +5,38 @@
   "type": "module",
   "main": "main.js",
   "scripts": {
-    "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "check": "pnpm quality && pnpm test && pnpm deadcode && pnpm security && pnpm build",
+    "deadcode": "knip",
+    "dev": "node esbuild.config.mjs",
+    "fix": "biome check --write .",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "quality": "biome check .",
+    "security": "pnpm audit --audit-level high",
     "test": "tsx --test tests/**/*.test.ts"
   },
   "engines": {
     "node": ">=22"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.9",
     "@types/node": "^26.2.0",
     "esbuild": "0.28.2",
     "obsidian": "1.13.1",
+    "knip": "6.32.2",
     "tsx": "4.23.12",
     "typescript": "7.0.2"
+  },
+  "knip": {
+    "entry": [
+      "tests/**/*.test.ts"
+    ],
+    "project": [
+      "src/**/*.ts",
+      "tests/**/*.ts",
+      "*.mjs"
+    ]
   },
   "packageManager": "pnpm@11.22.0"
 }

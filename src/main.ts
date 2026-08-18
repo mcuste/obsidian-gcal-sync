@@ -1,24 +1,16 @@
 import { randomUUID } from "node:crypto";
-import {
-  Notice,
-  Plugin,
-  TFile,
-  type CachedMetadata
-} from "obsidian";
-import {
-  parseVaultEvents,
-  type ParseIssue,
-  type VaultCalendarEvent
-} from "./event-parser";
+import { type CachedMetadata, Notice, Plugin, TFile } from "obsidian";
+import { type ParseIssue, parseVaultEvents, type VaultCalendarEvent } from "./event-parser";
 import {
   GoogleCalendarClient,
+  type GoogleCalendarInfo,
   type GoogleCredentials,
-  type SyncStats
+  type SyncStats,
 } from "./google-calendar";
 import {
   defaultSettings,
   GoogleCalendarSettingTab,
-  type GoogleCalendarSyncSettings
+  type GoogleCalendarSyncSettings,
 } from "./settings";
 
 const CHANGE_DEBOUNCE_MS = 1_000;
@@ -38,28 +30,31 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
     this.addCommand({
       id: "sync-google-calendar-now",
       name: "Sync Google Calendar now",
-      callback: () => void this.syncNow(true)
+      callback: () => void this.syncNow(true),
     });
 
     this.registerEvent(
-      this.app.metadataCache.on("changed", (file) => this.schedulePath(file.path))
+      this.app.metadataCache.on("changed", (file) => this.schedulePath(file.path)),
     );
+
     this.registerEvent(
       this.app.vault.on("create", (file) => {
         if (file instanceof TFile && file.extension === "md") this.schedulePath(file.path);
-      })
+      }),
     );
+
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
         if (file instanceof TFile && file.extension === "md") this.schedulePath(file.path);
-      })
+      }),
     );
+
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
         this.schedulePath(oldPath);
         this.schedulePath(file.path);
-      })
+      }),
     );
 
     this.resetPeriodicSync();
@@ -104,7 +99,9 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
   private async loadSettings(): Promise<void> {
     const stored = (await this.loadData()) as Partial<GoogleCalendarSyncSettings> | null;
     const vaultId = stored?.vaultId || randomUUID();
-    this.settings = Object.assign(defaultSettings(vaultId), stored ?? {}, { vaultId });
+    this.settings = Object.assign(defaultSettings(vaultId), stored ?? {}, {
+      vaultId,
+    });
   }
 
   private schedulePath(path: string): void {
@@ -146,7 +143,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
         if (!this.isConfigured() || affectedKeys.size === 0) return;
         const stats = await this.createClient().reconcile(
           flattenEvents(nextEventsByPath),
-          affectedKeys
+          affectedKeys,
         );
         if (changedEventCount(stats) > 0) new Notice(formatStats(stats));
       } catch (error) {
@@ -170,7 +167,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
   private async parseFile(
     file: TFile,
-    metadata: CachedMetadata | null
+    metadata: CachedMetadata | null,
   ): Promise<{ events: VaultCalendarEvent[]; issues: ParseIssue[] }> {
     const content = await this.app.vault.cachedRead(file);
     const frontmatter = metadata?.frontmatter as Record<string, unknown> | undefined;
@@ -182,26 +179,30 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
       basename: file.basename,
       content,
       frontmatter,
-      timeZone: this.settings.timeZone
+      timeZone: this.settings.timeZone,
     });
+  }
+
+  async listWritableCalendars(): Promise<GoogleCalendarInfo[]> {
+    return this.createClient().listWritableCalendars();
+  }
+
+  async createCalendar(summary: string): Promise<GoogleCalendarInfo> {
+    return this.createClient().createCalendar(summary);
   }
 
   private createClient(): GoogleCalendarClient {
     const credentials: GoogleCredentials = {
       clientId: this.readSecret(this.settings.clientIdSecret, "OAuth client ID"),
-      refreshToken: this.readSecret(this.settings.refreshTokenSecret, "refresh token")
+      refreshToken: this.readSecret(this.settings.refreshTokenSecret, "refresh token"),
     };
     if (this.settings.clientSecretSecret) {
       credentials.clientSecret = this.readSecret(
         this.settings.clientSecretSecret,
-        "OAuth client secret"
+        "OAuth client secret",
       );
     }
-    return new GoogleCalendarClient(
-      credentials,
-      this.settings.calendarId,
-      this.settings.vaultId
-    );
+    return new GoogleCalendarClient(credentials, this.settings.calendarId, this.settings.vaultId);
   }
 
   private readSecret(secretId: string, label: string): string {
@@ -222,7 +223,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 }
 
 function flattenEvents(
-  eventsByPath: ReadonlyMap<string, VaultCalendarEvent[]>
+  eventsByPath: ReadonlyMap<string, VaultCalendarEvent[]>,
 ): VaultCalendarEvent[] {
   return Array.from(eventsByPath.values()).flat();
 }
@@ -234,12 +235,12 @@ function assertNoIssues(issues: ParseIssue[]): void {
     .map((issue) => `${issue.sourcePath} (${issue.location}): ${issue.message}`)
     .join("\n");
   const remaining = issues.length > 5 ? `\n…and ${issues.length - 5} more` : "";
-  throw new Error(`Calendar sync stopped because event declarations are invalid:\n${details}${remaining}`);
+  throw new Error(
+    `Calendar sync stopped because event declarations are invalid:\n${details}${remaining}`,
+  );
 }
 
-function assertUniqueSourceKeys(
-  eventsByPath: ReadonlyMap<string, VaultCalendarEvent[]>
-): void {
+function assertUniqueSourceKeys(eventsByPath: ReadonlyMap<string, VaultCalendarEvent[]>): void {
   const seen = new Set<string>();
   for (const event of flattenEvents(eventsByPath)) {
     if (seen.has(event.sourceKey)) {
