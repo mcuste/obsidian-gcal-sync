@@ -88,8 +88,9 @@ git push && git push --tags
 the release workflow rejects a tag that does not equal the manifest version exactly.
 
 Pushing the tag runs `.github/workflows/release.yml`, which verifies the tag against
-`manifest.json`, builds, attests the artifacts, and opens a draft release with `main.js`,
-`manifest.json`, and `styles.css` attached. Review it and publish.
+`manifest.json`, builds, attests the artifacts, and publishes a release with `main.js`,
+`manifest.json`, and `styles.css` attached. There is nothing left to click, so the tag is the point
+of no return: Obsidian can offer the update as soon as the job finishes.
 
 ### Release notes
 

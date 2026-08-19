@@ -47,7 +47,7 @@ jobs:
             styles.css
 
       # The tag is the version, with no v prefix, so it matches the changelog heading as written.
-      - name: Create draft release from the changelog
+      - name: Create the release from the changelog
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
@@ -58,10 +58,10 @@ jobs:
             inside
           ' CHANGELOG.md > notes.md
           if [ -s notes.md ]; then
-            gh release create "$TAG" --title "$TAG" --draft --notes-file notes.md \
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md \
               main.js manifest.json styles.css
           else
             echo "CHANGELOG.md has no section for $TAG; falling back to generated notes" >&2
-            gh release create "$TAG" --title "$TAG" --draft --generate-notes \
+            gh release create "$TAG" --title "$TAG" --generate-notes \
               main.js manifest.json styles.css
           fi
