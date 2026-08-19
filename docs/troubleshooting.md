@@ -7,8 +7,8 @@ Remove it at [myaccount.google.com/permissions](https://myaccount.google.com/per
 authorize again.
 
 **"Google OAuth token refresh failed (400): invalid_grant"** usually means the refresh token
-expired or was revoked. An External OAuth client left in **Testing** expires refresh tokens after
-7 days. Set the consent screen to **In production** to stop this, then click **Authorize again**.
+expired or was revoked. An External OAuth client left in **Testing** expires refresh tokens after 7
+days. Set the consent screen to **In production** to stop this, then click **Authorize again**.
 
 **"Google authorization timed out"** means the browser flow was not completed within 2 minutes.
 Click **Authorize** again.
@@ -25,18 +25,17 @@ Check whether a firewall or security tool blocks Obsidian from binding local por
 **"Authorize Google again to grant calendar selection and creation access"** appears after an
 upgrade added scopes. Click **Authorize again**.
 
-**"The configured OAuth client ID secret is missing"** means the selected Obsidian secret is empty
-or was deleted. Re-select or recreate it in settings.
+**"OAuth client ID secret is empty or missing"**, or the same for the client secret, means the
+selected Obsidian secret is empty or was deleted. Re-select or recreate it in settings.
 
 ## Events are not created
 
 Work through these in order:
 
 1. The note is inside **Synced folders**, or that setting is empty.
-2. The directive is wrapped in backticks and those backticks hold nothing but directives. A
+2. The directive is wrapped in backticks, and those backticks hold nothing but directives. A
    directive in plain text, in a fenced code block, or in an HTML comment is ignored.
-3. A notice did not report a parse problem for that note. One invalid declaration skips the whole
-   note.
+3. No notice reported a parse problem for that note. One invalid declaration skips the whole note.
 4. A calendar is selected under **Calendar**, and it is the one you are looking at in Google.
 5. Run **Sync now** to force a full scan and see the result in a notice.
 
@@ -59,15 +58,15 @@ reasons:
 | A gcal entry needs when | A note-property entry map must have a `when` field. |
 | Unknown gcal field … | A note-property entry only takes `when`, `title`, and `repeat`. Check for a typo. |
 | Unknown directive gcal-… | An inline declaration only takes `gcal` and `gcal-repeat`. Check for a typo. |
-| gcal-repeat is no longer matched to gcal by position | Replace the parallel lists with a list of maps. See [Event syntax](event-syntax.md#note-properties). |
+| gcal-repeat is no longer matched to gcal by position | Replace the parallel lists with a list of maps. See [Event syntax](event-syntax.md#note-level-gcal-repeat). |
 | Another note already declares this event key | Two notes produce the same identity. Move one declaration. |
 | A note can declare at most 100 calendar events | Split the note. |
 
 ## Sync stopped or is waiting
 
 **"Google Calendar sync needs review"** means the plan deletes 5 or more events or changes 25 or
-more, and a background sync cannot ask you. Run **Sync now** to see the counts and
-approve or cancel.
+more, and a background sync cannot ask you. Run **Sync now** to see the counts and approve or
+cancel.
 
 **"...changes exceed the per-sync limit of 200"** means nothing was applied. Check which notes
 produced that many events. Raise **Change limit per sync** if the change is intended.
@@ -80,7 +79,7 @@ were skipped for safety. Fix the reported note and sync again.
 **An event was recreated instead of moved.** Moving a line, reordering declarations, and renaming a
 note are all safe on their own. The two cases that recreate an event are a declaration that moves
 **and** changes content in the same sync, and two identical events, where the match is ambiguous.
-See [How an event keeps its identity](event-syntax.md#how-an-event-keeps-its-identity).
+See [How an event keeps its identity](how-sync-works.md#how-an-event-keeps-its-identity).
 
 **An event written as a bare time reappeared today.** A time with no date keeps the date of the
 event on Google. Delete that event and there is no date left to read, so the next sync recreates it
@@ -94,6 +93,9 @@ server.
 **"Could not load calendars"** on the calendar dropdown means the API call failed. Retry, and if it
 persists, confirm the Google Calendar API is still enabled on your Cloud project and authorize
 again.
+
+**Markers have no color.** `styles.css` is missing from the plugin folder, which only happens after
+installing by hand. Copy it in alongside `main.js` and `manifest.json`.
 
 **Events remain after uninstalling.** They are ordinary Google Calendar events. Delete them in
 Google, or delete the declarations and sync before uninstalling.

@@ -63,7 +63,7 @@ interface ParseFileOptions {
 const MARK = "\uE000";
 const EVENT_DIRECTIVE = /\uE000gcal:([^\s\uE000]+)/g;
 const REPEAT_DIRECTIVE = /\uE000gcal-repeat:([^\s\uE000]+)/i;
-/** Any `gcal-…` token, so an unrecognised one is reported instead of quietly doing nothing. */
+/** Any `gcal-…` token, so an unrecognized one is reported instead of quietly doing nothing. */
 const SUFFIXED_DIRECTIVE = /\uE000gcal-([a-z]+):/gi;
 const KNOWN_SUFFIXES = ["repeat"];
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -74,7 +74,7 @@ const LOCAL_TIME = /^\d{2}:\d{2}$/;
  * Inline code holding nothing but directives. Backticks rather than a tag because Obsidian ends a
  * tag at the first `:`, which would render a stray pill and litter the tag pane.
  *
- * Any `gcal-…` token keeps the span recognised, so a directive the parser does not know is reported
+ * Any `gcal-…` token keeps the span recognized, so a directive the parser does not know is reported
  * rather than turning the whole declaration inert.
  */
 const DIRECTIVE_SPAN = /^\s*(?:gcal(?:-[a-z]+)?:[^\s`]+\s*)+$/i;
@@ -143,7 +143,7 @@ export function parseVaultEvents(options: ParseFileOptions): ParseResult {
       result.issues.push({
         sourcePath: options.path,
         location: event.sourceKey,
-        message: "Duplicate gcal ID in this note",
+        message: "Duplicate event key in this note",
       });
     }
     keys.add(event.sourceKey);
@@ -632,7 +632,6 @@ function maskInlineCode(content: string): string {
     output += content.slice(cursor, opening.start);
     const inner = content.slice(opening.end, closing.start);
     if (!inner.includes("\n") && DIRECTIVE_SPAN.test(inner)) {
-      // A declaration: blank the delimiters and mark the directives inside them.
       output += markDirectives(
         `${" ".repeat(opening.length)}${inner}${" ".repeat(closing.length)}`,
       );

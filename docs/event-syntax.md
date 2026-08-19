@@ -4,11 +4,10 @@ An event can be declared in two places, and the two are independent:
 
 | Level | Where | Title comes from | Use it for |
 | --- | --- | --- | --- |
-| **Inline** | anywhere in the note's text, in backticks | the prose before it | events that belong to a line, a task, or a bullet |
+| **Inline** | anywhere in the note's text, in backticks | the text in front of it | events that belong to a line, a task, or a bullet |
 | **Note properties** | the note's YAML frontmatter | the note name, or a `title` field | the note *being* the event, or a fixed set of events |
 
-Both accept the same start and duration values, and the same recurrence rules. Only the wrapping
-differs.
+Both take the same start, duration, and recurrence values. Only the wrapping differs.
 
 ## Inline
 
@@ -19,8 +18,6 @@ differs.
 Everything must sit inside backticks:
 
 ```markdown
-# Sprint planning
-
 - [ ] Design review `gcal:2026-08-18T14:00/PT1H`
 - Retro `gcal:2026-08-21T16:00`
 Offsite `gcal:2026-09-14/P3D`
@@ -46,26 +43,26 @@ Standup `gcal:09:00` `gcal-repeat:weekdays`
 
 ### Where the title comes from
 
-The prose since the start of the line, or since the previous declaration on that line. Leading
+The text since the start of the line, or since the previous declaration on that line. Leading
 bullets, checkboxes, numbers, and heading markers are stripped, and directive text never leaks in.
 If nothing is left, the note name is used.
 
 ### Several declarations on one line
 
-Each takes the prose before it as its title, and the repeat that follows it as its own:
+Each takes the text in front of it as its title, and the repeat that follows it as its own:
 
 ```markdown
 Standup `gcal:09:00 gcal-repeat:daily` Retro `gcal:11:00 gcal-repeat:weekly`
 ```
 
-That is two events titled "Standup" and "Retro". A repeat written once on the line applies to every
+That is two events, "Standup" and "Retro". A repeat written once on the line applies to every
 declaration on it.
 
 ### Why backticks are required
 
 Obsidian ends a tag at the first `:`, so a tag-shaped `#gcal:2026-08-18T14:00` would render as a
 stray `#gcal` pill trailed by loose text, and would add `#gcal` to your tag pane for every note.
-Backticks render the whole thing as one clean token and keep your tags to the ones you meant.
+Backticks render the whole thing as one clean token and leave your tags alone.
 
 A code span counts as a declaration only when it holds **nothing but directives**. Everything else
 is inert, so you can write about the syntax without creating events:
@@ -73,7 +70,7 @@ is inert, so you can write about the syntax without creating events:
 | Written | Result |
 | --- | --- |
 | `` `gcal:2026-08-18` `` | declares an event |
-| `` `Standup gcal:not-a-date` `` | inert, prose is mixed in |
+| `` `Standup gcal:not-a-date` `` | inert, text is mixed in |
 | a plain `gcal:2026-08-18` in a sentence | inert, no backticks |
 | a directive in a fenced block or an HTML comment | inert |
 
@@ -107,6 +104,9 @@ gcal:
 | `title` | Event title. Defaults to the note name | no |
 | `repeat` | Recurrence rule, same vocabulary as `gcal-repeat` | no |
 
+These three are the only fields, and an unknown one or a missing `when` is reported by name, so a
+typo cannot silently drop an event.
+
 A single entry may be a lone map rather than a list:
 
 ```yaml
@@ -119,7 +119,8 @@ gcal:
 
 ### Note-level gcal-repeat
 
-`gcal-repeat` as a plain value applies to **every** entry, and an entry's own `repeat` overrides it:
+`gcal-repeat` as a plain value applies to **every** entry, and an entry's own `repeat` overrides
+it:
 
 ```yaml
 ---
@@ -130,27 +131,30 @@ gcal-repeat: weekly
 ---
 ```
 
-### Mistakes are reported, not ignored
-
-An unknown field or a missing `when` produces a notice naming the note and the entry, so a typo
-cannot silently drop an event. The only fields are `when`, `title`, and `repeat`.
-
-`gcal-repeat` **lists** are no longer accepted. They used to be matched to `gcal` by position, which
-meant reordering `gcal` without reordering the other lists silently swapped the events' identities,
-and the form could not express a title at all. A note still using it reports:
+`gcal-repeat` **lists** are no longer accepted. They used to be matched to `gcal` by position, so
+reordering `gcal` without reordering the other list silently swapped the events' identities, and
+the form could not express a title at all. A note still using it reports:
 
 > gcal-repeat is no longer matched to gcal by position; give each gcal entry its own repeat field
 
-Rewrite it as a list of maps:
+Rewrite it as a list of maps. Before:
 
 ```yaml
-# before                          # after
-gcal:                             gcal:
-  - 2026-10-01/P2D                  - when: 2026-10-01/P2D
-  - 2026-11-01                        repeat: weekdays
-gcal-repeat:                        - when: 2026-11-01
+gcal:
+  - 2026-10-01/P2D
+  - 2026-11-01
+gcal-repeat:
   - weekdays
   - ""
+```
+
+After:
+
+```yaml
+gcal:
+  - when: 2026-10-01/P2D
+    repeat: weekdays
+  - when: 2026-11-01
 ```
 
 ## Start and duration
@@ -167,7 +171,7 @@ gcal-repeat:                        - when: 2026-11-01
 
 Rules:
 
-- **Times are written to the minute.** Seconds and milliseconds are not accepted in a start or in
+- **Times are written to the minute.** Seconds and milliseconds are not accepted, in a start or in
   a duration. Google is sent the seconds its own format requires.
 - A start with no `Z` and no UTC offset is read in the **Event time zone** setting. Leave that
   setting empty and it follows this device.
@@ -190,9 +194,9 @@ Delete the event in Google and the next sync recreates it at today's date, becau
 longer a date to read back. Pair a bare time with `gcal-repeat` when you want it to recur rather
 than happen once.
 
-A start with no offset keeps its wall-clock length across a daylight-saving change: `14:00/PT1H`
-is 14:00 to 15:00 on both sides of the transition. Use `Z` or an offset when you need exactly
-3600 seconds.
+A start with no offset keeps its wall-clock length across a daylight-saving change: `14:00/PT1H` is
+14:00 to 15:00 on both sides of the transition. Use `Z` or an offset when you need exactly 3600
+seconds.
 
 ## Recurrence
 
@@ -233,43 +237,28 @@ Rent `gcal:2026-09-01 gcal-repeat:FREQ=MONTHLY;BYMONTHDAY=1`
 Each declaration carries a small calendar icon in both Live Preview and Reading view, so you can
 see at a glance whether it reached Google.
 
+![Two notes side by side, one with synced and pending markers, one with a broken declaration](images/status-markers.png)
+
 | Marker | Meaning |
 | --- | --- |
-| Calendar with a tick | The event is on your calendar. |
-| Calendar with a clock | Parsed, but not synced yet. Sync is queued, or not configured. |
-| Calendar with a minus | Valid, but held back because another declaration in the same note is broken. |
-| Calendar with a cross | This declaration could not be read. Hover it for the reason. |
+| Green tick | The event is on your calendar. |
+| Grey clock | Parsed, but not synced yet. The sync is queued, or not configured. |
+| Orange minus | Valid, but held back because another declaration in the same note is broken. |
+| Red cross | This declaration could not be read. Hover it for the reason. |
 
-A note syncs all or nothing, which is why one bad declaration shows a cross on itself and a minus on
-its siblings rather than marking the whole note as broken.
+A note syncs all or nothing, which is why one bad declaration shows a cross on itself and a minus
+on its siblings rather than marking the whole note as broken.
 
-In Live Preview the declaration text is left as written so the cursor and selection keep working
-inside it; only the marker is added.
+In Live Preview the declaration text is left as written, so the cursor and selection keep working
+inside it. Only the marker is added.
 
-## How an event keeps its identity
-
-You never name an event. The plugin keys each declaration by its position and stores that key,
-hashed, on the Google event. Nothing about it appears in your note.
-
-Positions move, so a sync about to delete one event and create another first checks whether they are
-the same event that moved, and rekeys it in place if so. That covers the cases you would expect to
-break:
-
-| You do this | What happens |
-| --- | --- |
-| Insert a paragraph above an event | rekeyed in place |
-| Reorder declarations | rekeyed in place |
-| Rename or move the note | rekeyed in place |
-| Change only the title or time | patched, the key never moved |
-| Move a declaration **and** change its content in one edit | recreated, because nothing is left to match on |
-| Two identical events, one moves | recreated, because the match is ambiguous |
-
-The last two are the honest limits. Both are rare, because a sync runs about a second after you stop
-typing, so an edit and a move seldom land in the same sync.
-
-## Limits and error handling
+## Limits
 
 - A note may declare at most 100 events.
-- Two notes cannot claim the same identity. The first one scanned wins, and the other is skipped.
 - If any declaration in a note is invalid, the whole note is skipped for that sync and its last
   synced events are kept. A notice names the note, the line, and the problem.
+- Two notes cannot claim the same event. The first one scanned wins, and the other is skipped.
+
+You never write an id. The plugin keys each declaration by its position and copes with you moving
+or renaming things, which [How sync works](how-sync-works.md#how-an-event-keeps-its-identity)
+explains, along with the two cases where an event is recreated instead of moved.

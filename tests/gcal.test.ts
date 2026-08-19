@@ -324,8 +324,8 @@ test("events marked for another vault are never planned against", async () => {
   const { requests, transport } = recordingTransport((request) => {
     if (request.url === TOKEN_ENDPOINT) return response({ access_token: "access-token" });
     if (request.method === "GET") {
-      // Google ORs repeated privateExtendedProperty filters, so the listing can include events
-      // that only match the shared plugin marker.
+      // Google ORs repeated privateExtendedProperty filters, so a listing can include events
+      // belonging to another vault.
       return response({
         items: [
           {

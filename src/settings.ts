@@ -238,15 +238,15 @@ export class GcalSettingTab extends PluginSettingTab {
       "Inline, in backticks, titled by the text before it: " +
         "Design review `gcal:2026-08-18T14:00/PT1H`. Add `gcal-repeat:weekly` to make it recur. " +
         "Only a code span holding nothing but directives counts, so a note can describe the " +
-        "syntax safely. Events keep their identity when you move or rename things, with no id " +
-        "to write. " +
-        "In note properties, titled by the note name: gcal: 2026-08-18. For several events use a " +
-        "list of maps with when, title, repeat, and id fields. " +
+        "syntax without declaring events. " +
+        "In note properties, titled by the note name: gcal: 2026-08-18. For several events, use a " +
+        "list of maps with when, title, and repeat fields. " +
         "Starts: a date alone is all-day, a time alone is today, and a date with a time uses the " +
         "event time zone above unless you add Z or an offset. Times are written to the minute. " +
-        "Duration follows a slash and defaults to one hour. " +
+        "A duration follows a slash and defaults to one hour. " +
         "Repeat rules: daily, weekly, monthly, quarterly, yearly, weekdays, monday-thursday, " +
-        "every-2-weeks, or an RRULE.",
+        "every-2-weeks, or an RRULE. " +
+        "Moving a declaration or renaming a note keeps its events, so there is no id to write.",
     );
 
     new Setting(this.containerEl).setName("Trust model").setHeading();

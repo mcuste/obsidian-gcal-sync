@@ -568,7 +568,7 @@ test("the removed positional list form reports how to migrate", () => {
   );
 });
 
-test("an unrecognised directive is reported rather than silently ignored", () => {
+test("an unrecognized directive is reported rather than silently ignored", () => {
   const messages = (content: string): string[] =>
     parseVaultEvents({
       path: "n.md",

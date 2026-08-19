@@ -346,7 +346,6 @@ export default class GcalSyncPlugin extends Plugin {
     });
   }
 
-  /** True when the note may declare events, according to the configured folder allowlist. */
   private isSyncedPath(path: string): boolean {
     const folders = this.settings.syncFolders;
     if (folders.length === 0) return true;
