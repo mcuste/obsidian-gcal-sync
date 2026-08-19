@@ -116,6 +116,7 @@ before they are sent, and nothing else in your notes leaves the device.
 - [Security and privacy](docs/security-and-privacy.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Development and release](docs/development.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 

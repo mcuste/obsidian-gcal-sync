@@ -78,6 +78,7 @@ Maintainers only.
 ```bash
 pnpm check                                 # must pass first
 pnpm version patch --no-git-tag-version    # bumps package.json, manifest.json, versions.json
+$EDITOR CHANGELOG.md                       # add a "## [0.1.1] - <date>" section
 git commit -am "release: 0.1.1"
 git tag 0.1.1                              # no v prefix
 git push && git push --tags
@@ -88,11 +89,23 @@ the release workflow rejects a tag that does not equal the manifest version exac
 
 Pushing the tag runs `.github/workflows/release.yml`, which verifies the tag against
 `manifest.json`, builds, attests the artifacts, and opens a draft release with `main.js`,
-`manifest.json`, and `styles.css` attached. Review the generated notes and publish it.
+`manifest.json`, and `styles.css` attached. Review it and publish.
+
+### Release notes
+
+The release body is the matching section of [CHANGELOG.md](../CHANGELOG.md), which follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The workflow reads everything between
+`## [<tag>]` and the next `## [`, so the heading has to use the tag verbatim, with no `v` prefix.
+Obsidian shows these notes to users when it offers the update, so write them for users rather than
+as a commit log.
+
+If no section matches the tag, the workflow logs that and falls back to notes generated from
+commits, which is a signal that the changelog was forgotten rather than an intended outcome.
 
 ### Checklist
 
 - [ ] `pnpm check` passes.
+- [ ] `CHANGELOG.md` has a section whose heading matches the tag exactly.
 - [ ] Docs match behavior, including settings names and error messages.
 - [ ] `manifest.json`, `versions.json`, and the tag agree, and the tag has no `v` prefix.
 - [ ] The release has `main.js`, `manifest.json`, and `styles.css` attached as separate files.
