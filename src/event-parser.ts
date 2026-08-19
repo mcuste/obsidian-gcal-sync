@@ -20,12 +20,24 @@ export interface VaultCalendarEvent {
    * on Google its own date wins, which keeps the event where it was first created.
    */
   impliedDate?: true;
+  /** Absent for note properties, which sit in no particular place in the text. */
+  placement?: DirectivePlacement;
+}
+
+/** A declaration's position in its note, used to attach a status marker in the editor. */
+interface DirectivePlacement {
+  /** Zero-based line. */
+  line: number;
+  /** One-based index of the event declaration within that line. */
+  occurrence: number;
 }
 
 export interface ParseIssue {
   sourcePath: string;
   location: string;
   message: string;
+  /** Set when one declaration is at fault, so the editor can mark it rather than the whole note. */
+  placement?: DirectivePlacement;
 }
 
 export interface ParseResult {
@@ -44,13 +56,30 @@ interface ParseFileOptions {
   now?: Date;
 }
 
-const EVENT_DIRECTIVE = /#gcal:([^\s#]+)/g;
-const REPEAT_DIRECTIVE = /#gcal-repeat:([^\s#]+)/i;
-const ID_DIRECTIVE = /#gcal-id:([a-zA-Z0-9_-]+)/i;
+/**
+ * A directive only counts inside backticks, so the masking step marks each one with a sentinel the
+ * note itself can never contain. Prose that merely mentions gcal: therefore cannot declare an event.
+ */
+const MARK = "\uE000";
+const EVENT_DIRECTIVE = /\uE000gcal:([^\s\uE000]+)/g;
+const REPEAT_DIRECTIVE = /\uE000gcal-repeat:([^\s\uE000]+)/i;
+/** Any `gcal-…` token, so an unrecognised one is reported instead of quietly doing nothing. */
+const SUFFIXED_DIRECTIVE = /\uE000gcal-([a-z]+):/gi;
+const KNOWN_SUFFIXES = ["repeat"];
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DATE_TIME = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(Z|[+-]\d{2}:\d{2})$/;
 const LOCAL_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const LOCAL_TIME = /^\d{2}:\d{2}$/;
+/**
+ * Inline code holding nothing but directives. Backticks rather than a tag because Obsidian ends a
+ * tag at the first `:`, which would render a stray pill and litter the tag pane.
+ *
+ * Any `gcal-…` token keeps the span recognised, so a directive the parser does not know is reported
+ * rather than turning the whole declaration inert.
+ */
+const DIRECTIVE_SPAN = /^\s*(?:gcal(?:-[a-z]+)?:[^\s`]+\s*)+$/i;
+const DIRECTIVE_START = /[\s](?=gcal(?:-[a-z]+)?:)/gi;
+const ENTRY_FIELDS = ["when", "title", "repeat"];
 const DURATION = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/;
 const RRULE = /^FREQ=(?:DAILY|WEEKLY|MONTHLY|YEARLY)(?:;[A-Z]+=[A-Z0-9,+-]+)*$/;
 
@@ -134,52 +163,137 @@ export function parseVaultEvents(options: ParseFileOptions): ParseResult {
   return result;
 }
 
+interface FrontmatterEntry {
+  raw: string;
+  title?: string;
+  repeat?: string;
+}
+
 function parseFrontmatter(options: ParseFileOptions, result: ParseResult): void {
-  const rawEvents = toStringArray(options.frontmatter?.gcal);
-  if (rawEvents.length === 0) return;
+  const declared = toEntryArray(options.frontmatter?.gcal);
+  if (declared.length === 0) return;
 
-  const repeats = toStringArray(options.frontmatter?.["gcal-repeat"]);
-  const ids = toStringArray(options.frontmatter?.["gcal-id"]);
+  const sharedRepeat = readSharedRepeat(options, result);
+  if (sharedRepeat === undefined && result.issues.length > 0) return;
 
-  rawEvents.forEach((raw, index) => {
-    const id = ids[index] ?? (rawEvents.length === 1 ? ids[0] : undefined);
-    const repeat = repeats[index] ?? (rawEvents.length === 1 ? repeats[0] : undefined);
+  declared.forEach((declaration, index) => {
+    const location = `frontmatter gcal${declared.length > 1 ? `[${index}]` : ""}`;
+    const entry = readFrontmatterEntry(declaration);
+    if ("error" in entry) {
+      result.issues.push({ sourcePath: options.path, location, message: entry.error });
+      return;
+    }
+
     addEvent(result, options, {
-      raw,
-      repeat,
-      summary: options.basename,
-      sourceKey: makeSourceKey(options.path, id ?? `frontmatter-${index + 1}`),
-      location: `frontmatter gcal${rawEvents.length > 1 ? `[${index}]` : ""}`,
+      raw: entry.raw,
+      repeat: entry.repeat ?? sharedRepeat,
+      summary: entry.title ?? options.basename,
+      sourceKey: makeSourceKey(options.path, `frontmatter-${index + 1}`),
+      location,
     });
   });
+}
+
+/**
+ * Reads the note-level `gcal-repeat`, which applies to every entry. A list used to be matched to
+ * `gcal` by position, which silently reassigned events whenever the lists fell out of step, so a
+ * list is now an error pointing at the per-entry field.
+ */
+function readSharedRepeat(options: ParseFileOptions, result: ParseResult): string | undefined {
+  if (Array.isArray(options.frontmatter?.["gcal-repeat"])) {
+    result.issues.push({
+      sourcePath: options.path,
+      location: "gcal-repeat",
+      message:
+        "gcal-repeat is no longer matched to gcal by position; give each gcal entry its own repeat field",
+    });
+    return undefined;
+  }
+  return readEntryField(options.frontmatter?.["gcal-repeat"]);
+}
+
+function toEntryArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") return value.trim() === "" ? [] : [value];
+  if (typeof value === "object" && value !== null) return [value];
+  return [];
+}
+
+/** Reads one `gcal` entry, which is either a bare value or a map of named fields. */
+function readFrontmatterEntry(value: unknown): FrontmatterEntry | { error: string } {
+  if (typeof value === "string") {
+    const raw = value.trim();
+    return raw ? { raw } : { error: "A gcal entry cannot be empty" };
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      error: "A gcal entry must be a value such as 2026-08-18, or a map with a when field",
+    };
+  }
+
+  const record = value as Record<string, unknown>;
+  const unexpected = Object.keys(record).filter((key) => !ENTRY_FIELDS.includes(key));
+  if (unexpected.length > 0) {
+    return {
+      error: `Unknown gcal field ${unexpected.join(", ")}; use ${ENTRY_FIELDS.join(", ")}`,
+    };
+  }
+
+  const raw = readEntryField(record.when);
+  if (!raw) {
+    return { error: "A gcal entry needs when, such as when: 2026-08-18T09:15/PT15M" };
+  }
+  const title = readEntryField(record.title);
+  const repeat = readEntryField(record.repeat);
+  return {
+    raw,
+    ...(title ? { title } : {}),
+    ...(repeat ? { repeat } : {}),
+  };
+}
+
+function readEntryField(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
 }
 
 function parseLines(options: ParseFileOptions, result: ParseResult): void {
   const lines = maskIgnoredMarkdown(options.content).split(/\r?\n/);
   lines.forEach((line, lineIndex) => {
-    const repeat = REPEAT_DIRECTIVE.exec(line)?.[1];
-    const explicitId = ID_DIRECTIVE.exec(line)?.[1];
-    EVENT_DIRECTIVE.lastIndex = 0;
-
-    let occurrence = 0;
-    for (const match of line.matchAll(EVENT_DIRECTIVE)) {
-      occurrence += 1;
-      const raw = match[1];
-      if (!raw) continue;
-      const prefix = cleanSummary(line.slice(0, match.index));
-      const locator = explicitId
-        ? occurrence === 1
-          ? explicitId
-          : `${explicitId}-${occurrence}`
-        : `line-${lineIndex + 1}-${occurrence}`;
-      addEvent(result, options, {
-        raw,
-        repeat,
-        summary: prefix || options.basename,
-        sourceKey: makeSourceKey(options.path, locator),
+    for (const unknown of line.matchAll(SUFFIXED_DIRECTIVE)) {
+      const suffix = unknown[1]?.toLowerCase();
+      if (!suffix || KNOWN_SUFFIXES.includes(suffix)) continue;
+      result.issues.push({
+        sourcePath: options.path,
         location: `line ${lineIndex + 1}`,
+        message: `Unknown directive gcal-${suffix}; use gcal or gcal-repeat`,
       });
     }
+
+    const matches = Array.from(line.matchAll(EVENT_DIRECTIVE));
+    const lineRepeat = REPEAT_DIRECTIVE.exec(line)?.[1];
+
+    matches.forEach((match, index) => {
+      const raw = match[1];
+      if (!raw) return;
+
+      // A line can declare several events, so each takes the prose since the previous declaration
+      // as its title and the repeat that follows it as its own.
+      const start = match.index;
+      const previousStart = index === 0 ? 0 : (matches[index - 1]?.index ?? 0);
+      const tail = line.slice(start, matches[index + 1]?.index ?? line.length);
+
+      const occurrence = index + 1;
+      addEvent(result, options, {
+        raw,
+        repeat: REPEAT_DIRECTIVE.exec(tail)?.[1] ?? lineRepeat,
+        summary: cleanSummary(line.slice(previousStart, start)) || options.basename,
+        sourceKey: makeSourceKey(options.path, `line-${lineIndex + 1}-${occurrence}`),
+        location: `line ${lineIndex + 1}`,
+        placement: { line: lineIndex, occurrence },
+      });
+    });
   });
 }
 
@@ -192,6 +306,7 @@ function addEvent(
     summary: string;
     sourceKey: string;
     location: string;
+    placement?: DirectivePlacement;
   },
 ): void {
   try {
@@ -205,12 +320,14 @@ function addEvent(
       end: schedule.end,
       recurrence,
       ...(schedule.impliedDate ? { impliedDate: true as const } : {}),
+      ...(input.placement ? { placement: input.placement } : {}),
     });
   } catch (error) {
     result.issues.push({
       sourcePath: options.path,
       location: input.location,
       message: error instanceof Error ? error.message : String(error),
+      ...(input.placement ? { placement: input.placement } : {}),
     });
   }
 }
@@ -224,7 +341,6 @@ export interface EventSchedule {
 /**
  * Accepted forms, in order: a date (all-day), a timestamp with no UTC offset (read in `timeZone`),
  * a bare time (today in `timeZone`), and a timestamp carrying Z or an offset (an exact instant).
- * Times are written to the minute; Google is sent the RFC 3339 seconds it requires.
  */
 export function parseSchedule(
   raw: string,
@@ -398,16 +514,77 @@ function addUtcDays(value: string, days: number): string {
 function cleanSummary(value: string): string {
   return value
     .replace(/^\s{0,3}(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/, "")
-    .replace(/\s+#gcal-(?:repeat|id):[^\s#]+/gi, "")
+    .replace(/\uE000gcal(?:-[a-z]+)?:[^\s\uE000]+/gi, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
-function maskIgnoredMarkdown(content: string): string {
-  return maskFencesAndComments(maskInlineCode(content));
+/**
+ * The declarations on one line of a note, as offsets into the raw text. The editor uses this to
+ * attach a status marker without re-implementing the parser's rules about what counts.
+ *
+ * This looks at a single line, so it cannot know the line sits in a fenced block. Callers pair each
+ * result with a status looked up by placement, and a fenced line simply has none.
+ */
+export function findLineDirectives(
+  line: string,
+): Array<{ from: number; to: number; occurrence: number }> {
+  const found: Array<{ from: number; to: number; occurrence: number }> = [];
+  let occurrence = 0;
+
+  for (const span of directiveSpans(line)) {
+    // A directive span holds no backticks of its own, so blanking them leaves the delimiters
+    // as the whitespace that markDirectives turns into the sentinel.
+    const marked = markDirectives(line.slice(span.from, span.to).replaceAll("`", " "));
+    const events = marked.match(EVENT_DIRECTIVE)?.length ?? 0;
+    if (events === 0) continue;
+    occurrence += events;
+    found.push({ from: span.from, to: span.to, occurrence: occurrence - events + 1 });
+  }
+  return found;
 }
 
-function maskInlineCode(content: string): string {
-  const runs: Array<{ start: number; end: number; length: number; canOpen: boolean }> = [];
+/** True when a rendered code span's text is a declaration rather than prose about one. */
+export function isDirectiveSpanText(text: string): boolean {
+  return DIRECTIVE_SPAN.test(text) && EVENT_DIRECTIVE.test(markDirectives(` ${text} `));
+}
+
+/** The inline-code spans on a line that hold nothing but directives, delimiters included. */
+function directiveSpans(line: string): Array<{ from: number; to: number }> {
+  const runs = backtickRuns(line);
+  const closingFor = matchRuns(runs);
+  const spans: Array<{ from: number; to: number }> = [];
+  let cursor = 0;
+
+  for (let index = 0; index < runs.length; index += 1) {
+    const opening = runs[index];
+    const closingIndex = closingFor[index];
+    if (!opening?.canOpen || closingIndex === undefined) continue;
+    const closing = runs[closingIndex];
+    if (!closing || opening.start < cursor) continue;
+    if (DIRECTIVE_SPAN.test(line.slice(opening.end, closing.start))) {
+      spans.push({ from: opening.start, to: closing.end });
+    }
+    cursor = closing.end;
+    index = closingIndex;
+  }
+  return spans;
+}
+
+function maskIgnoredMarkdown(content: string): string {
+  // Strip any stray sentinel first so a note can never forge a directive.
+  return maskFencesAndComments(maskInlineCode(content.replaceAll(MARK, " ")));
+}
+
+interface BacktickRun {
+  start: number;
+  end: number;
+  length: number;
+  canOpen: boolean;
+}
+
+function backtickRuns(content: string): BacktickRun[] {
+  const runs: BacktickRun[] = [];
   for (let index = 0; index < content.length; ) {
     if (content[index] !== "`") {
       index += 1;
@@ -423,27 +600,62 @@ function maskInlineCode(content: string): string {
       canOpen: !isEscaped(content, start),
     });
   }
+  return runs;
+}
 
+/** For each run, the index of the next run of equal length, which closes the span it opens. */
+function matchRuns(runs: BacktickRun[]): Array<number | undefined> {
   const nextByLength = new Map<number, number>();
-  const nextSameLength = new Array<number | undefined>(runs.length);
+  const closingFor = new Array<number | undefined>(runs.length);
   for (let index = runs.length - 1; index >= 0; index -= 1) {
     const run = runs[index];
     if (!run) continue;
-    nextSameLength[index] = nextByLength.get(run.length);
+    closingFor[index] = nextByLength.get(run.length);
     nextByLength.set(run.length, index);
   }
+  return closingFor;
+}
 
-  const masked = content.split("");
+function maskInlineCode(content: string): string {
+  const runs = backtickRuns(content);
+  const nextSameLength = matchRuns(runs);
+
+  let output = "";
+  let cursor = 0;
   for (let index = 0; index < runs.length; index += 1) {
     const opening = runs[index];
     const closingIndex = nextSameLength[index];
     if (!opening?.canOpen || closingIndex === undefined) continue;
     const closing = runs[closingIndex];
-    if (!closing) continue;
-    maskRange(masked, opening.start, closing.end);
+    if (!closing || opening.start < cursor) continue;
+
+    output += content.slice(cursor, opening.start);
+    const inner = content.slice(opening.end, closing.start);
+    if (!inner.includes("\n") && DIRECTIVE_SPAN.test(inner)) {
+      // A declaration: blank the delimiters and mark the directives inside them.
+      output += markDirectives(
+        `${" ".repeat(opening.length)}${inner}${" ".repeat(closing.length)}`,
+      );
+    } else {
+      output += blankOut(content.slice(opening.start, closing.end));
+    }
+    cursor = closing.end;
     index = closingIndex;
   }
-  return masked.join("");
+  output += content.slice(cursor);
+  return output;
+}
+
+/**
+ * Overwrites the whitespace in front of each directive rather than inserting, so every offset still
+ * points at the note as the reader wrote it.
+ */
+function markDirectives(value: string): string {
+  return value.replace(DIRECTIVE_START, MARK);
+}
+
+function blankOut(value: string): string {
+  return value.replace(/[^\n\r]/g, " ");
 }
 
 function maskFencesAndComments(content: string): string {
@@ -544,10 +756,4 @@ function normalizeDayName(value: string): string {
   const code = DAY_CODES[value];
   const entry = Object.entries(DAY_CODES).find(([, candidate]) => candidate === code);
   return entry?.[0] ?? value;
-}
-
-function toStringArray(value: unknown): string[] {
-  if (typeof value === "string") return [value];
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string");
 }

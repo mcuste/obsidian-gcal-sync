@@ -33,7 +33,8 @@ or was deleted. Re-select or recreate it in settings.
 Work through these in order:
 
 1. The note is inside **Synced folders**, or that setting is empty.
-2. The tag is not inside inline code, a fenced code block, or an HTML comment.
+2. The directive is wrapped in backticks and those backticks hold nothing but directives. A
+   directive in plain text, in a fenced code block, or in an HTML comment is ignored.
 3. A notice did not report a parse problem for that note. One invalid declaration skips the whole
    note.
 4. A calendar is selected under **Calendar**, and it is the one you are looking at in Google.
@@ -55,8 +56,11 @@ reasons:
 | Invalid recurrence | See the rules in [Event syntax](event-syntax.md#recurrence). |
 | Repeat interval must be a whole number of units | `every-2-weeks` works, `every-1.5-weeks` does not. |
 | Invalid recurring weekday range | Ranges run forward from Monday to Sunday, so `friday-monday` is rejected. |
-| Duplicate gcal ID in this note | Give each `#gcal-id` in a note a distinct name. |
-| Another note already declares this event key | Two notes claim the same ID. Rename one. |
+| A gcal entry needs when | A note-property entry map must have a `when` field. |
+| Unknown gcal field … | A note-property entry only takes `when`, `title`, and `repeat`. Check for a typo. |
+| Unknown directive gcal-… | An inline declaration only takes `gcal` and `gcal-repeat`. Check for a typo. |
+| gcal-repeat is no longer matched to gcal by position | Replace the parallel lists with a list of maps. See [Event syntax](event-syntax.md#note-properties). |
+| Another note already declares this event key | Two notes produce the same identity. Move one declaration. |
 | A note can declare at most 100 calendar events | Split the note. |
 
 ## Sync stopped or is waiting
@@ -73,9 +77,10 @@ were skipped for safety. Fix the reported note and sync again.
 
 ## Duplicate or recreated events
 
-An event's identity includes the note path and, unless you set `#gcal-id`, the line number.
-Renaming the note or moving the line deletes the old event and creates a new one. Add
-`#gcal-id:<name>` to keep inline events stable across edits.
+**An event was recreated instead of moved.** Moving a line, reordering declarations, and renaming a
+note are all safe on their own. The two cases that recreate an event are a declaration that moves
+**and** changes content in the same sync, and two identical events, where the match is ambiguous.
+See [How an event keeps its identity](event-syntax.md#how-an-event-keeps-its-identity).
 
 **An event written as a bare time reappeared today.** A time with no date keeps the date of the
 event on Google. Delete that event and there is no date left to read, so the next sync recreates it

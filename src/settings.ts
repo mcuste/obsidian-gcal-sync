@@ -47,7 +47,6 @@ export function defaultSettings(vaultId: string): GcalSyncSettings {
   };
 }
 
-/** The zone this device is in, which an empty Event time zone setting follows. */
 export function systemTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
@@ -236,12 +235,18 @@ export class GcalSettingTab extends PluginSettingTab {
 
     new Setting(this.containerEl).setName("Event syntax").setHeading();
     new Setting(this.containerEl).setDesc(
-      "Inline: Meeting #gcal:2026-08-18T14:00/PT1H. Note property: gcal: 2026-08-18. " +
-        "A date alone is all-day (#gcal:2026-08-18). A time alone means today " +
-        "(#gcal:14:00). Times with no offset use the event time zone above; add Z or an " +
-        "offset to pin an exact instant. Duration follows a slash and defaults to one hour. " +
-        "Recurrence: #gcal-repeat:weekly, #gcal-repeat:monday-thursday, or an RRULE. " +
-        "Add #gcal-id:stable-name to keep an inline event stable when lines move.",
+      "Inline, in backticks, titled by the text before it: " +
+        "Design review `gcal:2026-08-18T14:00/PT1H`. Add `gcal-repeat:weekly` to make it recur. " +
+        "Only a code span holding nothing but directives counts, so a note can describe the " +
+        "syntax safely. Events keep their identity when you move or rename things, with no id " +
+        "to write. " +
+        "In note properties, titled by the note name: gcal: 2026-08-18. For several events use a " +
+        "list of maps with when, title, repeat, and id fields. " +
+        "Starts: a date alone is all-day, a time alone is today, and a date with a time uses the " +
+        "event time zone above unless you add Z or an offset. Times are written to the minute. " +
+        "Duration follows a slash and defaults to one hour. " +
+        "Repeat rules: daily, weekly, monthly, quarterly, yearly, weekdays, monday-thursday, " +
+        "every-2-weeks, or an RRULE.",
     );
 
     new Setting(this.containerEl).setName("Trust model").setHeading();

@@ -111,6 +111,7 @@ test("managed-event listing isolates the vault, exhausts pages, and encodes IDs"
     deleted: 2,
     unchanged: 0,
     deferredDeletes: 0,
+    syncedSourceKeys: [],
   });
   const tokenRequest = requests[0];
   assert.ok(tokenRequest);
@@ -176,6 +177,7 @@ test("create and patch bodies preserve source metadata and remove recurrence", a
     deleted: 0,
     unchanged: 0,
     deferredDeletes: 0,
+    syncedSourceKeys: ["new", "changed"],
   });
   const createRequest = requests.find(
     (request) => request.method === "POST" && request.url.includes("/calendar/v3/"),
@@ -350,6 +352,7 @@ test("events marked for another vault are never planned against", async () => {
     deleted: 0,
     unchanged: 0,
     deferredDeletes: 0,
+    syncedSourceKeys: [],
   });
   assert.deepEqual(
     requests.filter((request) => request.method !== "GET" && request.url !== TOKEN_ENDPOINT),
@@ -473,6 +476,7 @@ test("deletes are held back while part of the vault is unreadable", async () => 
     deleted: 0,
     unchanged: 0,
     deferredDeletes: 2,
+    syncedSourceKeys: [],
   });
   assert.equal(requests.filter((request) => request.method === "DELETE").length, 0);
 });

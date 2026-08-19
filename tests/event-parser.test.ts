@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  findLineDirectives,
   MAX_EVENTS_PER_NOTE,
   makeRemoteSourceKey,
   normalizeRecurrence,
@@ -11,12 +12,11 @@ import {
 const TIME_ZONE = "America/New_York";
 const VAULT_ID = "vault-id";
 
-test("parses inline event title, duration, recurrence, and stable ID", () => {
+test("parses inline event title, duration, and recurrence", () => {
   const result = parseVaultEvents({
     path: "Projects/Launch.md",
     basename: "Launch",
-    content:
-      "- [ ] Team standup #gcal:2026-08-18T09:00-04:00/PT30M #gcal-repeat:monday-thursday #gcal-id:standup",
+    content: "- [ ] Team standup `gcal:2026-08-18T09:00-04:00/PT30M gcal-repeat:monday-thursday`",
     timeZone: TIME_ZONE,
     vaultId: VAULT_ID,
   });
@@ -24,8 +24,8 @@ test("parses inline event title, duration, recurrence, and stable ID", () => {
   assert.deepEqual(result.issues, []);
   assert.deepEqual(result.events, [
     {
-      sourceKey: "Projects/Launch.md::standup",
-      remoteSourceKey: makeRemoteSourceKey(VAULT_ID, "Projects/Launch.md::standup"),
+      sourceKey: "Projects/Launch.md::line-1-1",
+      remoteSourceKey: makeRemoteSourceKey(VAULT_ID, "Projects/Launch.md::line-1-1"),
       summary: "Team standup",
       start: {
         dateTime: "2026-08-18T09:00:00-04:00",
@@ -36,6 +36,7 @@ test("parses inline event title, duration, recurrence, and stable ID", () => {
         timeZone: TIME_ZONE,
       },
       recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH"],
+      placement: { line: 0, occurrence: 1 },
     },
   ]);
 });
@@ -44,7 +45,7 @@ test("falls back to the note name when an inline directive has no title", () => 
   const result = parseVaultEvents({
     path: "Calendar/Release.md",
     basename: "Release",
-    content: "#gcal:2026-09-01",
+    content: "`gcal:2026-09-01`",
     timeZone: "UTC",
     vaultId: VAULT_ID,
   });
@@ -54,14 +55,13 @@ test("falls back to the note name when an inline directive has no title", () => 
   assert.deepEqual(result.events[0]?.end, { date: "2026-09-02" });
 });
 
-test("parses multiple frontmatter events using the note name", () => {
+test("parses multiple frontmatter events, keyed by their position", () => {
   const result = parseVaultEvents({
     path: "Travel.md",
     basename: "Travel",
-    content: "---\ngcal:\n  - 2026-10-01/P2D\n  - 2026-11-01\n---",
+    content: "---\ngcal:\n---",
     frontmatter: {
-      gcal: ["2026-10-01/P2D", "2026-11-01"],
-      "gcal-id": ["outbound", "return"],
+      gcal: [{ when: "2026-10-01/P2D" }, { when: "2026-11-01" }],
     },
     timeZone: "UTC",
     vaultId: VAULT_ID,
@@ -70,8 +70,8 @@ test("parses multiple frontmatter events using the note name", () => {
   assert.deepEqual(
     result.events.map((event) => [event.sourceKey, event.summary, event.end.date]),
     [
-      ["Travel.md::outbound", "Travel", "2026-10-03"],
-      ["Travel.md::return", "Travel", "2026-11-02"],
+      ["Travel.md::frontmatter-1", "Travel", "2026-10-03"],
+      ["Travel.md::frontmatter-2", "Travel", "2026-11-02"],
     ],
   );
 });
@@ -195,15 +195,15 @@ test("ignores directives inside code fences, inline code, and HTML comments", ()
     path: "Docs/Syntax.md",
     basename: "Syntax",
     content: [
-      "Write `Standup #gcal:not-a-date` to declare an event.",
+      "Write `Standup gcal:not-a-date` to declare an event.",
       "```markdown",
-      "Fenced #gcal:also-not-a-date",
+      "Fenced `gcal:also-not-a-date`",
       "```",
-      "<!-- Commented #gcal:still-not-a-date -->",
+      "<!-- Commented `gcal:still-not-a-date` -->",
       "~~~",
-      "Tilde fenced #gcal:nope",
+      "Tilde fenced `gcal:nope`",
       "~~~",
-      "Real #gcal:2026-08-18 #gcal-id:real",
+      "Real `gcal:2026-08-18`",
     ].join("\n"),
     timeZone: "UTC",
     vaultId: VAULT_ID,
@@ -212,7 +212,7 @@ test("ignores directives inside code fences, inline code, and HTML comments", ()
   assert.deepEqual(result.issues, []);
   assert.deepEqual(
     result.events.map((event) => [event.sourceKey, event.summary]),
-    [["Docs/Syntax.md::real", "Real"]],
+    [["Docs/Syntax.md::line-9-1", "Real"]],
   );
 });
 
@@ -220,22 +220,21 @@ test("ignores a directive inside a multi-line HTML comment", () => {
   const result = parseVaultEvents({
     path: "Notes.md",
     basename: "Notes",
-    content:
-      "<!--\nDraft #gcal:2026-08-18 #gcal-id:draft\n-->\nKept #gcal:2026-08-19 #gcal-id:kept",
+    content: "<!--\nDraft `gcal:2026-08-18`\n-->\nKept `gcal:2026-08-19`",
     timeZone: "UTC",
     vaultId: VAULT_ID,
   });
 
   assert.deepEqual(
     result.events.map((event) => event.sourceKey),
-    ["Notes.md::kept"],
+    ["Notes.md::line-4-1"],
   );
 });
 
 test("rejects a note that declares events in bulk", () => {
   const lines = Array.from(
     { length: MAX_EVENTS_PER_NOTE + 1 },
-    (_unused, index) => `Spam ${index} #gcal:2026-08-18 #gcal-id:spam${index}`,
+    (_unused, index) => `Spam ${index} \`gcal:2026-08-18\``,
   );
   const result = parseVaultEvents({
     path: "Spam.md",
@@ -256,7 +255,7 @@ test("returns no events when any declaration in a note is invalid", () => {
   const result = parseVaultEvents({
     path: "Broken.md",
     basename: "Broken",
-    content: "Good #gcal:2026-08-18\nBad #gcal:not-a-date",
+    content: "Good `gcal:2026-08-18`\nBad `gcal:not-a-date`",
     timeZone: "UTC",
     vaultId: VAULT_ID,
   });
@@ -266,19 +265,22 @@ test("returns no events when any declaration in a note is invalid", () => {
   assert.equal(result.issues[0]?.location, "line 2");
 });
 
-test("duplicate explicit IDs invalidate every declaration in the note", () => {
+test("two declarations on one line stay distinct without any id", () => {
   const result = parseVaultEvents({
     path: "Duplicate.md",
     basename: "Duplicate",
-    content: "First #gcal:2026-08-18 #gcal-id:shared\nSecond #gcal:2026-08-19 #gcal-id:shared",
+    content: "First `gcal:2026-08-18` Second `gcal:2026-08-19`",
     timeZone: "UTC",
     vaultId: VAULT_ID,
   });
 
-  assert.deepEqual(result.events, []);
+  assert.deepEqual(result.issues, []);
   assert.deepEqual(
-    result.issues.map((issue) => issue.message),
-    ["Duplicate gcal ID in this note"],
+    result.events.map((event) => [event.sourceKey, event.summary]),
+    [
+      ["Duplicate.md::line-1-1", "First"],
+      ["Duplicate.md::line-1-2", "Second"],
+    ],
   );
 });
 
@@ -287,9 +289,9 @@ test("invalid durations and weekday ranges invalidate the note", () => {
     path: "Invalid.md",
     basename: "Invalid",
     content: [
-      "Zero #gcal:2026-08-18T09:00Z/PT0M",
-      "Malformed #gcal:2026-08-18T09:00Z/P1H",
-      "Range #gcal:2026-08-18 #gcal-repeat:friday-monday",
+      "Zero `gcal:2026-08-18T09:00Z/PT0M`",
+      "Malformed `gcal:2026-08-18T09:00Z/P1H`",
+      "Range `gcal:2026-08-18 gcal-repeat:friday-monday`",
     ].join("\n"),
     timeZone: "UTC",
     vaultId: VAULT_ID,
@@ -304,4 +306,284 @@ test("invalid durations and weekday ranges invalidate the note", () => {
       "Invalid recurring weekday range",
     ],
   );
+});
+
+test("inline code holding only directives declares events", () => {
+  const result = parseVaultEvents({
+    path: "Notes.md",
+    basename: "Notes",
+    content: [
+      "Design review `gcal:2026-08-18T14:00/PT1H`",
+      "Standup `gcal:09:00` `gcal-repeat:weekdays`",
+    ].join("\n"),
+    timeZone: "UTC",
+    vaultId: VAULT_ID,
+    now: new Date("2026-08-18T12:00:00Z"),
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(
+    result.events.map((event) => [event.sourceKey, event.summary, event.recurrence]),
+    [
+      ["Notes.md::line-1-1", "Design review", undefined],
+      ["Notes.md::line-2-1", "Standup", ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]],
+    ],
+  );
+});
+
+test("inline code mixing prose with a directive stays inert", () => {
+  const result = parseVaultEvents({
+    path: "Notes.md",
+    basename: "Notes",
+    content: [
+      "Write `Standup gcal:not-a-date` to declare an event.",
+      "Or `see gcal:2026-08-18 for details`.",
+      "Real `gcal:2026-08-19`",
+    ].join("\n"),
+    timeZone: "UTC",
+    vaultId: VAULT_ID,
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(
+    result.events.map((event) => event.sourceKey),
+    ["Notes.md::line-3-1"],
+  );
+});
+
+test("directives are written without any tag prefix", () => {
+  const result = parseVaultEvents({
+    path: "Notes.md",
+    basename: "Notes",
+    content: [
+      "Design review `gcal:2026-08-18T14:00/PT1H`",
+      "Standup `gcal:09:00 gcal-repeat:weekdays`",
+      "Spread `gcal:2026-08-20`",
+    ].join("\n"),
+    timeZone: "UTC",
+    vaultId: VAULT_ID,
+    now: new Date("2026-08-18T12:00:00Z"),
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(
+    result.events.map((event) => [event.sourceKey, event.summary, event.recurrence]),
+    [
+      ["Notes.md::line-1-1", "Design review", undefined],
+      ["Notes.md::line-2-1", "Standup", ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]],
+      ["Notes.md::line-3-1", "Spread", undefined],
+    ],
+  );
+});
+
+test("a directive outside backticks never declares an event", () => {
+  const result = parseVaultEvents({
+    path: "Notes.md",
+    basename: "Notes",
+    content: "Ask about gcal:2026-08-18, #gcal:2026-08-19, and the gcal:14:00 window",
+    timeZone: "UTC",
+    vaultId: VAULT_ID,
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(result.events, []);
+});
+
+test("reports where each declaration sits so the editor can mark it", () => {
+  assert.deepEqual(findLineDirectives("Design review `gcal:2026-08-18T14:00` today"), [
+    { from: 14, to: 37, occurrence: 1 },
+  ]);
+  assert.deepEqual(
+    findLineDirectives("A `gcal:09:00` then B `gcal:10:00`").map((found) => found.occurrence),
+    [1, 2],
+  );
+  assert.deepEqual(findLineDirectives("Standup `gcal:09:00 gcal-repeat:weekly`"), [
+    { from: 8, to: 39, occurrence: 1 },
+  ]);
+  assert.deepEqual(findLineDirectives("Write `Standup gcal:not-a-date` here"), []);
+  assert.deepEqual(findLineDirectives("A plain gcal:2026-08-18 mention"), []);
+  assert.deepEqual(findLineDirectives("Repeat only `gcal-repeat:weekly`"), []);
+});
+
+test("declaration ranges cover the backticks so a marker can sit after them", () => {
+  const line = "Design review `gcal:2026-08-18T14:00` today";
+  const [found] = findLineDirectives(line);
+
+  assert.ok(found);
+  assert.equal(line.slice(found.from, found.to), "`gcal:2026-08-18T14:00`");
+});
+
+test("a note property entry can carry its own when, title, and repeat", () => {
+  const result = parseVaultEvents({
+    path: "Projects/Launch.md",
+    basename: "Launch",
+    content: "body",
+    frontmatter: {
+      gcal: [
+        { when: "2026-08-18T09:15/PT15M", title: "Standup", repeat: "weekdays" },
+        { when: "2026-08-20/P1D" },
+      ],
+    },
+    timeZone: "UTC",
+    vaultId: VAULT_ID,
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(
+    result.events.map((event) => [event.sourceKey, event.summary, event.recurrence?.[0] ?? null]),
+    [
+      ["Projects/Launch.md::frontmatter-1", "Standup", "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"],
+      ["Projects/Launch.md::frontmatter-2", "Launch", null],
+    ],
+  );
+});
+
+test("a single note property entry may be a lone map", () => {
+  const result = parseVaultEvents({
+    path: "Launch.md",
+    basename: "Launch",
+    content: "body",
+    frontmatter: { gcal: { when: "2026-08-18", title: "Launch day" } },
+    timeZone: "UTC",
+    vaultId: VAULT_ID,
+  });
+
+  assert.deepEqual(
+    result.events.map((event) => [event.sourceKey, event.summary]),
+    [["Launch.md::frontmatter-1", "Launch day"]],
+  );
+});
+
+test("note property entries report a missing when and a typo", () => {
+  const messages = (frontmatter: Record<string, unknown>): string[] =>
+    parseVaultEvents({
+      path: "Launch.md",
+      basename: "Launch",
+      content: "body",
+      frontmatter,
+      timeZone: "UTC",
+      vaultId: VAULT_ID,
+    }).issues.map((issue) => issue.message);
+
+  assert.deepEqual(messages({ gcal: [{ title: "No date" }] }), [
+    "A gcal entry needs when, such as when: 2026-08-18T09:15/PT15M",
+  ]);
+  assert.deepEqual(messages({ gcal: [{ when: "2026-08-18", titel: "Oops" }] }), [
+    "Unknown gcal field titel; use when, title, repeat",
+  ]);
+  assert.deepEqual(messages({ gcal: [{ when: "2026-08-18", id: "gone" }] }), [
+    "Unknown gcal field id; use when, title, repeat",
+  ]);
+  assert.deepEqual(messages({ gcal: [42] }), [
+    "A gcal entry must be a value such as 2026-08-18, or a map with a when field",
+  ]);
+});
+
+test("each declaration on a line takes its own title and repeat", () => {
+  const result = parseVaultEvents({
+    path: "Notes.md",
+    basename: "Notes",
+    content: "Standup `gcal:09:00 gcal-repeat:daily` Retro `gcal:11:00 gcal-repeat:weekly`",
+    timeZone: "UTC",
+    vaultId: VAULT_ID,
+    now: new Date("2026-08-18T12:00:00Z"),
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(
+    result.events.map((event) => [event.sourceKey, event.summary, event.recurrence?.[0]]),
+    [
+      ["Notes.md::line-1-1", "Standup", "RRULE:FREQ=DAILY"],
+      ["Notes.md::line-1-2", "Retro", "RRULE:FREQ=WEEKLY"],
+    ],
+  );
+});
+
+test("a second declaration on a line never inherits the first one's directive text", () => {
+  const result = parseVaultEvents({
+    path: "Notes.md",
+    basename: "Notes",
+    content: "A `gcal:09:00` B `gcal:11:00` `gcal-repeat:weekly`",
+    timeZone: "UTC",
+    vaultId: VAULT_ID,
+    now: new Date("2026-08-18T12:00:00Z"),
+  });
+
+  const summaries = result.events.map((event) => event.summary);
+  assert.deepEqual(summaries, ["A", "B"]);
+  for (const summary of summaries) {
+    assert.ok(!summary.includes("gcal:"), `${summary} leaked directive text into the title`);
+  }
+});
+
+test("a note-level repeat applies to every entry", () => {
+  const parse = (frontmatter: Record<string, unknown>) =>
+    parseVaultEvents({
+      path: "L.md",
+      basename: "Launch",
+      content: "x",
+      frontmatter,
+      timeZone: "UTC",
+      vaultId: VAULT_ID,
+    });
+
+  const shared = parse({ gcal: ["2026-08-18", "2026-08-20"], "gcal-repeat": "weekly" });
+  assert.deepEqual(shared.issues, []);
+  assert.deepEqual(
+    shared.events.map((event) => event.recurrence?.[0]),
+    ["RRULE:FREQ=WEEKLY", "RRULE:FREQ=WEEKLY"],
+  );
+
+  const entryWins = parse({
+    gcal: [{ when: "2026-08-18", repeat: "daily" }],
+    "gcal-repeat": "weekly",
+  });
+  assert.deepEqual(entryWins.events[0]?.recurrence, ["RRULE:FREQ=DAILY"]);
+
+  assert.deepEqual(parse({ gcal: ["2026-08-18", "2026-08-20"], "gcal-id": "gone" }).issues, []);
+});
+
+test("the removed positional list form reports how to migrate", () => {
+  const result = parseVaultEvents({
+    path: "Travel.md",
+    basename: "Travel",
+    content: "x",
+    frontmatter: {
+      gcal: ["2026-10-01/P2D", "2026-11-01"],
+      "gcal-repeat": ["weekdays", ""],
+    },
+    timeZone: "UTC",
+    vaultId: VAULT_ID,
+  });
+
+  assert.deepEqual(result.events, []);
+  assert.deepEqual(
+    result.issues.map((issue) => [issue.location, issue.message]),
+    [
+      [
+        "gcal-repeat",
+        "gcal-repeat is no longer matched to gcal by position; give each gcal entry its own repeat field",
+      ],
+    ],
+  );
+});
+
+test("an unrecognised directive is reported rather than silently ignored", () => {
+  const messages = (content: string): string[] =>
+    parseVaultEvents({
+      path: "n.md",
+      basename: "Note",
+      content,
+      timeZone: "UTC",
+      vaultId: VAULT_ID,
+      now: new Date("2026-08-19T12:00:00Z"),
+    }).issues.map((issue) => issue.message);
+
+  assert.deepEqual(messages("Standup `gcal:09:00 gcal-repat:weekly`"), [
+    "Unknown directive gcal-repat; use gcal or gcal-repeat",
+  ]);
+  assert.deepEqual(messages("Standup `gcal:09:00 gcal-id:standup`"), [
+    "Unknown directive gcal-id; use gcal or gcal-repeat",
+  ]);
+  assert.deepEqual(messages("Standup `gcal:09:00 gcal-repeat:weekly`"), []);
 });

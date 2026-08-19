@@ -8,6 +8,7 @@ import {
   TFile,
 } from "obsidian";
 import { confirmReconciliation } from "./confirm-modal";
+import { directiveStatusExtension, directiveStatusPostProcessor } from "./directive-status";
 import { type ParseIssue, parseVaultEvents, type VaultCalendarEvent } from "./event-parser";
 import {
   DEFAULT_MAX_CHANGES_PER_SYNC,
@@ -29,9 +30,7 @@ const CHANGE_DEBOUNCE_MS = 1_000;
 const MAX_REPORTED_ISSUES = 5;
 
 /**
- * A snapshot of the vault's event declarations.
- *
- * A note that fails to parse keeps its last valid events so one broken declaration cannot strand
+ * A note that fails to parse keeps its last valid events, so one broken declaration cannot strand
  * every other note. A note that has never parsed leaves its events unknown, which suppresses
  * deletes for that sync.
  */
@@ -39,6 +38,16 @@ interface VaultScan {
   eventsByPath: Map<string, VaultCalendarEvent[]>;
   issues: ParseIssue[];
   unknownPaths: Set<string>;
+}
+
+/**
+ * What the editor shows next to a declaration. A note is synced all or nothing, so one unreadable
+ * declaration marks itself "error" and holds its siblings at "blocked".
+ */
+export type DirectiveStatus = "synced" | "pending" | "blocked" | "error";
+
+function placementKey(path: string, line: number, occurrence: number): string {
+  return `${path}\u0000${line}\u0000${occurrence}`;
 }
 
 export interface PluginTimers {
@@ -74,6 +83,11 @@ export default class GcalSyncPlugin extends Plugin {
   private periodicTimer: number | undefined;
   private syncTail: Promise<void> = Promise.resolve();
   private lastPendingApproval = "";
+  private syncedSourceKeys = new Set<string>();
+  private erroredPaths = new Set<string>();
+  private erroredPlacements = new Set<string>();
+  private sourceKeyByPlacement = new Map<string, string>();
+  private readonly statusListeners = new Set<() => void>();
   private readonly createCalendarGateway: NonNullable<
     GcalSyncPluginDependencies["createCalendarGateway"]
   >;
@@ -123,6 +137,9 @@ export default class GcalSyncPlugin extends Plugin {
       }),
     );
 
+    this.registerEditorExtension(directiveStatusExtension(this));
+    this.registerMarkdownPostProcessor(directiveStatusPostProcessor(this));
+
     this.resetPeriodicSync();
     this.app.workspace.onLayoutReady(() => void this.syncNow(false));
   }
@@ -134,6 +151,52 @@ export default class GcalSyncPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  directiveStatus(path: string, line: number, occurrence: number): DirectiveStatus | undefined {
+    const key = placementKey(path, line, occurrence);
+    if (this.erroredPlacements.has(key)) return "error";
+    if (this.erroredPaths.has(path)) return "blocked";
+
+    const sourceKey = this.sourceKeyByPlacement.get(key);
+    if (!sourceKey) return undefined;
+    return this.syncedSourceKeys.has(sourceKey) ? "synced" : "pending";
+  }
+
+  onStatusChange(listener: () => void): () => void {
+    this.statusListeners.add(listener);
+    return () => this.statusListeners.delete(listener);
+  }
+
+  private publishStatus(scan: VaultScan, affectedKeys?: ReadonlySet<string>): void {
+    const errored = new Set(scan.unknownPaths);
+    const erroredPlacements = new Set<string>();
+    for (const issue of scan.issues) {
+      errored.add(issue.sourcePath);
+      if (!issue.placement) continue;
+      const { line, occurrence } = issue.placement;
+      erroredPlacements.add(placementKey(issue.sourcePath, line, occurrence));
+    }
+    this.erroredPaths = errored;
+    this.erroredPlacements = erroredPlacements;
+
+    this.sourceKeyByPlacement = new Map();
+    for (const [path, events] of scan.eventsByPath) {
+      for (const event of events) {
+        if (!event.placement) continue;
+        const { line, occurrence } = event.placement;
+        this.sourceKeyByPlacement.set(placementKey(path, line, occurrence), event.sourceKey);
+      }
+    }
+
+    if (affectedKeys) for (const key of affectedKeys) this.syncedSourceKeys.delete(key);
+    for (const listener of this.statusListeners) listener();
+  }
+
+  private recordSynced(keys: readonly string[], replaceAll: boolean): void {
+    if (replaceAll) this.syncedSourceKeys = new Set(keys);
+    else for (const key of keys) this.syncedSourceKeys.add(key);
+    for (const listener of this.statusListeners) listener();
   }
 
   resetPeriodicSync(): void {
@@ -151,6 +214,7 @@ export default class GcalSyncPlugin extends Plugin {
       try {
         const scan = await this.scanVault();
         this.eventsByPath = scan.eventsByPath;
+        this.publishStatus(scan);
         this.reportIssues(scan.issues);
         if (!this.isConfigured()) {
           if (interactive) new Notice("Configure and authorize Google Calendar Sync first");
@@ -162,6 +226,7 @@ export default class GcalSyncPlugin extends Plugin {
           maxChanges: this.settings.maxChangesPerSync,
           ...(interactive ? { approvePlan: this.confirmPlan } : {}),
         });
+        this.recordSynced(stats.syncedSourceKeys, true);
         this.reportStats(stats, interactive);
       } catch (error) {
         new Notice(errorMessage(error), 10_000);
@@ -222,6 +287,7 @@ export default class GcalSyncPlugin extends Plugin {
         }
         dropDuplicateSourceKeys(scan);
         this.eventsByPath = scan.eventsByPath;
+        this.publishStatus(scan, affectedKeys);
         this.reportIssues(scan.issues);
 
         if (!this.isConfigured() || affectedKeys.size === 0) return;
@@ -230,6 +296,7 @@ export default class GcalSyncPlugin extends Plugin {
           allowDeletes: scan.unknownPaths.size === 0,
           maxChanges: this.settings.maxChangesPerSync,
         });
+        this.recordSynced(stats.syncedSourceKeys, false);
         this.reportStats(stats, false);
       } catch (error) {
         new Notice(errorMessage(error), 10_000);
@@ -247,10 +314,6 @@ export default class GcalSyncPlugin extends Plugin {
     return scan;
   }
 
-  /**
-   * Records one note's events. A note that fails to parse falls back to its last valid events, or
-   * is marked unknown when it has never parsed, so its remote events are not treated as stale.
-   */
   private async collectFile(scan: VaultScan, file: TFile): Promise<void> {
     const parsed = await this.parseFile(file, this.app.metadataCache.getFileCache(file));
     if (parsed.issues.length === 0) {
@@ -270,7 +333,7 @@ export default class GcalSyncPlugin extends Plugin {
   ): Promise<{ events: VaultCalendarEvent[]; issues: ParseIssue[] }> {
     const content = await this.app.vault.cachedRead(file);
     const frontmatter = metadata?.frontmatter as Record<string, unknown> | undefined;
-    if (!content.includes("#gcal:") && frontmatter?.gcal === undefined) {
+    if (!content.includes("gcal:") && frontmatter?.gcal === undefined) {
       return { events: [], issues: [] };
     }
     return parseVaultEvents({

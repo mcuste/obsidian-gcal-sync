@@ -50,13 +50,13 @@ first, sync, then switch.
 Add a line to any note:
 
 ```markdown
-Design review #gcal:2026-08-18T14:00/PT1H
+Design review `gcal:2026-08-18T14:00/PT1H`
 ```
 
 Save the note. The plugin syncs about a second later and shows a notice with what changed. You can
 also run the **Sync now** command from the command palette, or click **Sync** in settings.
 
-The event title is the text before the tag, so this creates a one hour "Design review".
+The event title is the text before the declaration, so this creates a one hour "Design review".
 
 Next: [Event syntax](event-syntax.md) for everything you can write, and
 [Settings](settings.md) for the rest of the options.

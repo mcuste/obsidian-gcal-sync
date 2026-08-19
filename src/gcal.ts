@@ -46,6 +46,8 @@ export interface SyncStats {
   deferredDeletes: number;
   /** Set when the plan was large or destructive and nobody approved it, so nothing ran. */
   pendingApproval?: ReconciliationSummary;
+  /** Source keys confirmed present on Google once this sync finished. */
+  syncedSourceKeys: readonly string[];
 }
 
 export interface ReconciliationSummary {
@@ -149,9 +151,10 @@ export class GcalClient implements GcalGateway {
         created: 0,
         updated: 0,
         deleted: 0,
-        unchanged: plan.unchanged,
+        unchanged: plan.unchanged.length,
         deferredDeletes,
         pendingApproval: summary,
+        syncedSourceKeys: plan.unchanged,
       };
     }
 
@@ -165,8 +168,13 @@ export class GcalClient implements GcalGateway {
       created: plan.creates.length,
       updated: plan.updates.length,
       deleted: plan.deletes.length,
-      unchanged: plan.unchanged,
+      unchanged: plan.unchanged.length,
       deferredDeletes,
+      syncedSourceKeys: [
+        ...plan.creates.map((event) => event.sourceKey),
+        ...plan.updates.map((update) => update.event.sourceKey),
+        ...plan.unchanged,
+      ],
     };
   }
 

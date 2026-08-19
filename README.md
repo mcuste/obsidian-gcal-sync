@@ -2,15 +2,15 @@
 
 Write events in your notes, get them on your Google Calendar.
 
-Add `#gcal:2026-08-18T14:00/PT1H` to a line, and the plugin creates that event on the calendar you
+Add `gcal:2026-08-18T14:00/PT1H` to a line, and the plugin creates that event on the calendar you
 selected. Edit the line and the event changes. Delete the line and the event is removed. Nothing is
 written back into your notes.
 
 ```markdown
-Design review #gcal:2026-08-18T14:00/PT1H
-Standup #gcal:2026-08-18T09:15/PT15M #gcal-repeat:weekdays
-Conference #gcal:2026-09-14/P3D
-Coffee with Sam #gcal:16:00/PT30M
+Design review `gcal:2026-08-18T14:00/PT1H`
+Standup `gcal:2026-08-18T09:15/PT15M gcal-repeat:weekdays`
+Conference `gcal:2026-09-14/P3D`
+Coffee with Sam `gcal:16:00/PT30M`
 ```
 
 A date is an all-day event, a timestamp is a timed one, and a time on its own means today. Times
@@ -80,7 +80,7 @@ Copy `main.js` and `manifest.json` into the plugin folder above.
    **Authorize**.
 3. Pick a calendar, or create a new one so synced events stay separate from the rest of your
    calendar.
-4. Add `#gcal:2026-08-18T14:00/PT1H` to a note and run the **Sync now** command.
+4. Add `gcal:2026-08-18T14:00/PT1H` to a note and run the **Sync now** command.
 
 ## Safety
 

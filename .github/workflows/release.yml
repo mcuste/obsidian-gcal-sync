@@ -44,9 +44,10 @@ jobs:
           subject-path: |
             main.js
             manifest.json
+            styles.css
 
       - name: Create draft release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" --title "$TAG" --draft --generate-notes main.js manifest.json
+        run: gh release create "$TAG" --title "$TAG" --draft --generate-notes main.js manifest.json styles.css

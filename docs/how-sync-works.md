@@ -32,13 +32,15 @@ plugin. So are events synced from a different vault, even on the same calendar.
 
 ## Matching notes to events
 
-Each declaration gets a key of `<note path>::<locator>`, where the locator is your `#gcal-id`, the
-line number, or the property index. The key sent to Google is a SHA-256 hash of the key and the
-vault ID, so paths and folder names are not uploaded.
+Each declaration gets a key of `<note path>::<locator>`, where the locator is the line number or the
+property index. The key sent to Google is a SHA-256 hash of that key and the vault ID, so paths and
+folder names are not uploaded.
 
-Anything that changes the key, such as renaming the note or moving a line without a `#gcal-id`,
-looks like one event disappearing and another appearing. The old event is deleted and a new one is
-created.
+Anything that changes the key, such as renaming the note or moving a line, first looks like one
+event disappearing and another appearing. Before acting on that, the plan checks whether the pair is
+really one event that moved, by comparing title, start, end, and recurrence. If exactly one stale
+event matches, it is rekeyed with a patch instead of being deleted and recreated, so guest replies
+and reminders survive. An ambiguous match is never claimed.
 
 An event is updated when its title, start, end, or recurrence differ. Times are compared as
 instants, so an equivalent timestamp written a different way is not a change. Updates are sent as a
@@ -46,7 +48,7 @@ patch of those fields only, so guests, descriptions, colors, and reminders you a
 survive.
 
 One case reads back from Google rather than overwriting it. When a note gives a time but no date,
-such as `#gcal:09:00`, the date is filled in from today only the first time. After that the event
+such as `gcal:09:00`, the date is filled in from today only the first time. After that the event
 keeps the date it already has, so it does not walk forward every day. The time of day and duration
 still come from the note, so editing the time moves the event within its original day.
 
@@ -68,7 +70,7 @@ it owns, so no deletions run in that sync. Creates and updates still apply. The 
 deletions held back. A note that used to parse keeps its last good events instead, so one broken
 line cannot strand every other note.
 
-**Duplicate keys.** If two notes declare the same ID, the first one scanned keeps it and the other
+**Duplicate keys.** If two notes produce the same key, the first one scanned keeps it and the other
 is skipped, so a note cannot take over another note's event.
 
 **Synced folders.** Restrict declarations to folders you control when the vault is shared or

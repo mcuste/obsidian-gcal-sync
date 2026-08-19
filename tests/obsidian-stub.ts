@@ -52,6 +52,10 @@ export class Plugin {
 
   registerEvent(_event: unknown): void {}
 
+  registerEditorExtension(_extension: unknown): void {}
+
+  registerMarkdownPostProcessor(_processor: unknown): void {}
+
   async loadData(): Promise<unknown> {
     return null;
   }
@@ -69,6 +73,10 @@ export class PluginSettingTab {
 
   display(): void {}
 }
+
+export const editorInfoField = {} as unknown;
+
+export function setIcon(_parent: unknown, _iconId: string): void {}
 
 export class Modal {
   constructor(readonly app: App) {}

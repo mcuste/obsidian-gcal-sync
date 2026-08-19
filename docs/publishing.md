@@ -54,8 +54,8 @@ git push && git push --tags
 ```
 
 Pushing the tag runs `.github/workflows/release.yml`, which verifies the tag against
-`manifest.json`, builds, attests the artifacts, and opens a draft release with `main.js` and
-`manifest.json` attached. Review the generated notes and publish it.
+`manifest.json`, builds, attests the artifacts, and opens a draft release with `main.js`,
+`manifest.json`, and `styles.css` attached. Review the generated notes and publish it.
 
 `versions.json` maps each plugin version to the Obsidian version it needs, which lets older
 Obsidian installs fall back to an older plugin release instead of a broken one.
@@ -80,7 +80,7 @@ credentials. That is allowed, but it is real setup work and reviewers will look 
 in the listing rather than only in the README:
 
 > Declare calendar events inline in your notes and sync them to Google Calendar. Add
-> `#gcal:2026-08-18T14:00/PT1H` to a line and the event appears on the calendar you selected;
+> `gcal:2026-08-18T14:00/PT1H` to a line and the event appears on the calendar you selected;
 > edit or delete the line and the event follows. Sync is one way, and the plugin only touches
 > events it created.
 >
@@ -99,5 +99,5 @@ repository. Nothing about the release process changes.
 - [ ] `pnpm check` passes.
 - [ ] Docs match behavior, including settings names and error messages.
 - [ ] `manifest.json`, `versions.json`, and the tag agree.
-- [ ] The release has `main.js` and `manifest.json` attached as separate files.
+- [ ] The release has `main.js`, `manifest.json`, and `styles.css` attached as separate files.
 - [ ] The README still discloses every host the plugin contacts.

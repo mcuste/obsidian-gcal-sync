@@ -16,7 +16,8 @@ export interface ReconciliationPlan {
   creates: VaultCalendarEvent[];
   updates: Array<{ eventId: string; event: VaultCalendarEvent }>;
   deletes: string[];
-  unchanged: number;
+  /** Source keys already correct on Google, so they need no request. */
+  unchanged: string[];
 }
 
 export function planReconciliation(
@@ -32,7 +33,7 @@ export function planReconciliation(
     creates: [],
     updates: [],
     deletes: [],
-    unchanged: 0,
+    unchanged: [],
   };
 
   for (const [sourceKey, desired] of desiredByKey) {
@@ -56,7 +57,7 @@ export function planReconciliation(
       if (remoteSourceKey(current) !== desired.remoteSourceKey || !eventsEqual(current, anchored)) {
         plan.updates.push({ eventId: requireEventId(current), event: anchored });
       } else {
-        plan.unchanged += 1;
+        plan.unchanged.push(desired.sourceKey);
       }
     }
 
@@ -67,11 +68,46 @@ export function planReconciliation(
     remoteByKey.delete(desired.remoteSourceKey);
   }
 
+  const stale: GoogleEvent[] = [];
   for (const [remoteKey, staleEvents] of remoteByKey) {
     if (affectedSourceKeys && !affectedSourceKeys.has(remoteKey)) continue;
-    for (const stale of staleEvents) plan.deletes.push(requireEventId(stale));
+    stale.push(...staleEvents);
   }
+
+  reanchorMovedEvents(plan, stale);
+  for (const event of stale) plan.deletes.push(requireEventId(event));
   return plan;
+}
+
+/**
+ * A declaration's key includes its position, so moving a line or renaming the note produces a create
+ * and a delete for what is really the same event. Recreating it on Google would lose its guest
+ * replies and reminders, so a create matching exactly one stale event becomes an update that
+ * rewrites the stored key in place.
+ *
+ * Two identical events are indistinguishable, so an ambiguous match claims neither.
+ */
+function reanchorMovedEvents(plan: ReconciliationPlan, stale: GoogleEvent[]): void {
+  if (plan.creates.length === 0 || stale.length === 0) return;
+
+  const unmatched: VaultCalendarEvent[] = [];
+  for (const desired of plan.creates) {
+    const candidates = stale.filter((candidate) =>
+      eventsEqual(candidate, anchorImpliedDate(desired, candidate)),
+    );
+    const only = candidates.length === 1 ? candidates[0] : undefined;
+    if (!only) {
+      unmatched.push(desired);
+      continue;
+    }
+
+    plan.updates.push({
+      eventId: requireEventId(only),
+      event: anchorImpliedDate(desired, only),
+    });
+    stale.splice(stale.indexOf(only), 1);
+  }
+  plan.creates = unmatched;
 }
 
 function groupRemoteEvents(events: GoogleEvent[]): Map<string, GoogleEvent[]> {
@@ -94,9 +130,8 @@ const WALL_CLOCK = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}$/;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
- * A note that gave a time but no date is anchored to the date the event already has on Google, so
- * it stays where it was first created instead of moving forward every day. The time of day and the
- * duration still come from the note, so editing the time retimes the event in place.
+ * Pins a start with no date to the date the event already has on Google. The time of day and the
+ * duration still come from the note, so editing the time retimes the event on its original day.
  */
 function anchorImpliedDate(desired: VaultCalendarEvent, remote: GoogleEvent): VaultCalendarEvent {
   if (!desired.impliedDate) return desired;

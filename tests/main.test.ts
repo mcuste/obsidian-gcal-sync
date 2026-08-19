@@ -172,8 +172,13 @@ class InMemoryGateway implements GcalGateway {
       created: plan.creates.length,
       updated: plan.updates.length,
       deleted: plan.deletes.length,
-      unchanged: plan.unchanged,
+      unchanged: plan.unchanged.length,
       deferredDeletes,
+      syncedSourceKeys: [
+        ...plan.creates.map((event) => event.sourceKey),
+        ...plan.updates.map((update) => update.event.sourceKey),
+        ...plan.unchanged,
+      ],
     };
   }
 
@@ -237,7 +242,14 @@ class BlockingGateway implements GcalGateway {
     this.active -= 1;
     this.completions += 1;
     this.resolveWaiters(this.completionWaiters, this.completions);
-    return { created: 0, updated: 0, deleted: 0, unchanged: 0, deferredDeletes: 0 };
+    return {
+      created: 0,
+      updated: 0,
+      deleted: 0,
+      unchanged: 0,
+      deferredDeletes: 0,
+      syncedSourceKeys: [],
+    };
   }
 
   async listWritableCalendars(): Promise<GcalInfo[]> {
@@ -324,22 +336,21 @@ function sourceKeys(
 
 const KNOWN_SOURCE_KEYS = new Map(
   [
-    "New.md::new",
-    "Update.md::update",
+    "New.md::line-1-1",
+    "Update.md::line-1-1",
     "Removed.md::stale",
     "Other.md::event",
-    "Old.md::event",
-    "New.md::event",
-    "Delete.md::event",
-    "Valid.md::new",
-    "Notes.md::standup",
-    "Broken.md::fixed",
-    "Calendar/Team.md::standup",
-    "Shared/Injected.md::injected",
-    "Shared/Later.md::later",
+    "Old.md::line-1-1",
+    "New.md::line-1-1",
+    "Delete.md::line-1-1",
+    "Valid.md::line-1-1",
+    "Notes.md::line-1-1",
+    "Broken.md::line-1-1",
+    "Calendar/Team.md::line-1-1",
+    "Shared/Injected.md::line-1-1",
+    "Shared/Later.md::line-1-1",
   ].map((sourceKey) => [remoteKey(sourceKey), sourceKey] as const),
 );
-
 function setup(
   gateway: GcalGateway,
   storedSettings: Partial<GcalSyncSettings> = {},
@@ -386,20 +397,20 @@ function setup(
 
 test("full lifecycle scan creates, updates, and deletes managed events", async () => {
   const gateway = new InMemoryGateway([
-    managed("update-id", "Update.md::update", "Old title"),
+    managed("update-id", "Update.md::line-1-1", "Old title"),
     managed("stale-id", "Removed.md::stale", "Stale"),
   ]);
   const { plugin, vault, workspace } = setup(gateway);
-  vault.set("New.md", "New #gcal:2026-08-18 #gcal-id:new");
-  vault.set("Update.md", "Updated #gcal:2026-08-18 #gcal-id:update");
+  vault.set("New.md", "New `gcal:2026-08-18`");
+  vault.set("Update.md", "Updated `gcal:2026-08-18`");
 
   await plugin.onload();
   workspace.ready();
   await gateway.waitForCompleted(1);
 
   assert.deepEqual(sourceKeys(gateway), [
-    ["New.md::new", "New", "created-1"],
-    ["Update.md::update", "Updated", "update-id"],
+    ["New.md::line-1-1", "New", "created-1"],
+    ["Update.md::line-1-1", "Updated", "update-id"],
   ]);
   plugin.onunload();
 });
@@ -407,7 +418,7 @@ test("full lifecycle scan creates, updates, and deletes managed events", async (
 test("deleting a note removes cached source keys without touching unrelated events", async () => {
   const gateway = new InMemoryGateway();
   const { plugin, vault, workspace, timers } = setup(gateway);
-  vault.set("Delete.md", "Delete me #gcal:2026-08-18 #gcal-id:event");
+  vault.set("Delete.md", "Delete me `gcal:2026-08-18`");
 
   await plugin.onload();
   workspace.ready();
@@ -426,20 +437,20 @@ test("deleting a note removes cached source keys without touching unrelated even
 test("renaming a note reconciles both its old and new paths", async () => {
   const gateway = new InMemoryGateway();
   const { plugin, vault, workspace, timers } = setup(gateway);
-  vault.set("Old.md", "Before #gcal:2026-08-18 #gcal-id:event");
+  vault.set("Old.md", "Before `gcal:2026-08-18`");
 
   await plugin.onload();
   workspace.ready();
   await gateway.waitForCompleted(1);
   gateway.addRemote(managed("unrelated-id", "Other.md::event", "Other"));
 
-  const renamedFile = vault.rename("Old.md", "New.md", "After #gcal:2026-08-18 #gcal-id:event");
+  const renamedFile = vault.rename("Old.md", "New.md", "After `gcal:2026-08-18`");
   vault.emit("rename", renamedFile, "Old.md");
   timers.runTimeouts();
   await gateway.waitForCompleted(2);
 
   assert.deepEqual(sourceKeys(gateway), [
-    ["New.md::event", "After", "created-2"],
+    ["New.md::line-1-1", "After", "created-2"],
     ["Other.md::event", "Other", "unrelated-id"],
   ]);
   plugin.onunload();
@@ -448,15 +459,15 @@ test("renaming a note reconciles both its old and new paths", async () => {
 test("a note that has never parsed does not block others and suspends deletes", async () => {
   const gateway = new InMemoryGateway([managed("stale-id", "Removed.md::stale", "Stale")]);
   const { plugin, vault } = setup(gateway);
-  vault.set("Valid.md", "Would create #gcal:2026-08-18 #gcal-id:new");
-  vault.set("Broken.md", "Broken #gcal:not-a-date");
+  vault.set("Valid.md", "Would create `gcal:2026-08-18`");
+  vault.set("Broken.md", "Broken `gcal:not-a-date`");
 
   await plugin.onload();
   await plugin.syncNow(false);
 
   assert.deepEqual(sourceKeys(gateway), [
     ["Removed.md::stale", "Stale", "stale-id"],
-    ["Valid.md::new", "Would create", "created-1"],
+    ["Valid.md::line-1-1", "Would create", "created-1"],
   ]);
   assert.equal(gateway.options.at(-1)?.allowDeletes, false);
   plugin.onunload();
@@ -465,35 +476,35 @@ test("a note that has never parsed does not block others and suspends deletes", 
 test("a note that becomes invalid keeps the events it last synced", async () => {
   const gateway = new InMemoryGateway();
   const { plugin, vault, workspace, timers } = setup(gateway);
-  const file = vault.set("Notes.md", "Standup #gcal:2026-08-18 #gcal-id:standup");
+  const file = vault.set("Notes.md", "Standup `gcal:2026-08-18`");
 
   await plugin.onload();
   workspace.ready();
   await gateway.waitForCompleted(1);
-  assert.deepEqual(sourceKeys(gateway), [["Notes.md::standup", "Standup", "created-1"]]);
+  assert.deepEqual(sourceKeys(gateway), [["Notes.md::line-1-1", "Standup", "created-1"]]);
 
-  vault.set("Notes.md", "Standup #gcal:2026-08-18 #gcal-id:standup\nBroken #gcal:not-a-date");
+  vault.set("Notes.md", "Standup `gcal:2026-08-18`\nBroken `gcal:not-a-date`");
   vault.emit("create", file);
   timers.runTimeouts();
   await gateway.waitForCompleted(2);
 
-  assert.deepEqual(sourceKeys(gateway), [["Notes.md::standup", "Standup", "created-1"]]);
+  assert.deepEqual(sourceKeys(gateway), [["Notes.md::line-1-1", "Standup", "created-1"]]);
   plugin.onunload();
 });
 
 test("full syncs resume deleting once every note parses again", async () => {
   const gateway = new InMemoryGateway([managed("stale-id", "Removed.md::stale", "Stale")]);
   const { plugin, vault } = setup(gateway);
-  vault.set("Broken.md", "Broken #gcal:not-a-date");
+  vault.set("Broken.md", "Broken `gcal:not-a-date`");
 
   await plugin.onload();
   await plugin.syncNow(false);
   assert.deepEqual(sourceKeys(gateway), [["Removed.md::stale", "Stale", "stale-id"]]);
 
-  vault.set("Broken.md", "Fixed #gcal:2026-08-18 #gcal-id:fixed");
+  vault.set("Broken.md", "Fixed `gcal:2026-08-18`");
   await plugin.syncNow(false);
 
-  assert.deepEqual(sourceKeys(gateway), [["Broken.md::fixed", "Fixed", "created-1"]]);
+  assert.deepEqual(sourceKeys(gateway), [["Broken.md::line-1-1", "Fixed", "created-1"]]);
   assert.equal(gateway.options.at(-1)?.allowDeletes, true);
   plugin.onunload();
 });
@@ -501,20 +512,20 @@ test("full syncs resume deleting once every note parses again", async () => {
 test("notes outside the synced folders never reach the calendar", async () => {
   const gateway = new InMemoryGateway();
   const { plugin, vault, workspace, timers } = setup(gateway, { syncFolders: ["Calendar"] });
-  vault.set("Calendar/Team.md", "Standup #gcal:2026-08-18 #gcal-id:standup");
-  vault.set("Shared/Injected.md", "Injected #gcal:2026-08-18 #gcal-id:injected");
+  vault.set("Calendar/Team.md", "Standup `gcal:2026-08-18`");
+  vault.set("Shared/Injected.md", "Injected `gcal:2026-08-18`");
 
   await plugin.onload();
   workspace.ready();
   await gateway.waitForCompleted(1);
-  assert.deepEqual(sourceKeys(gateway), [["Calendar/Team.md::standup", "Standup", "created-1"]]);
+  assert.deepEqual(sourceKeys(gateway), [["Calendar/Team.md::line-1-1", "Standup", "created-1"]]);
 
-  const outside = vault.set("Shared/Later.md", "Later #gcal:2026-08-19 #gcal-id:later");
+  const outside = vault.set("Shared/Later.md", "Later `gcal:2026-08-19`");
   vault.emit("create", outside);
   timers.runTimeouts();
 
   await plugin.syncNow(false);
-  assert.deepEqual(sourceKeys(gateway), [["Calendar/Team.md::standup", "Standup", "created-1"]]);
+  assert.deepEqual(sourceKeys(gateway), [["Calendar/Team.md::line-1-1", "Standup", "created-1"]]);
   plugin.onunload();
 });
 
@@ -526,7 +537,7 @@ test("only user-initiated syncs can approve a large or destructive plan", async 
     { maxChangesPerSync: 42 },
     confirmPlan,
   );
-  const file = vault.set("Notes.md", "Standup #gcal:2026-08-18 #gcal-id:standup");
+  const file = vault.set("Notes.md", "Standup `gcal:2026-08-18`");
 
   await plugin.onload();
   workspace.ready();
@@ -534,7 +545,7 @@ test("only user-initiated syncs can approve a large or destructive plan", async 
   assert.equal(gateway.options.at(-1)?.approvePlan, undefined, "startup syncs cannot prompt");
   assert.equal(gateway.options.at(-1)?.maxChanges, 42);
 
-  vault.set("Notes.md", "Renamed #gcal:2026-08-18 #gcal-id:standup");
+  vault.set("Notes.md", "Renamed `gcal:2026-08-18`");
   vault.emit("create", file);
   timers.runTimeouts();
   await gateway.waitForCompleted(2);
@@ -551,26 +562,26 @@ test("a stored change limit that is not a positive integer falls back to the def
     maxChangesPerSync: 0,
     syncFolders: undefined as unknown as string[],
   });
-  vault.set("Notes.md", "Standup #gcal:2026-08-18 #gcal-id:standup");
+  vault.set("Notes.md", "Standup `gcal:2026-08-18`");
 
   await plugin.onload();
   await plugin.syncNow(false);
 
   assert.equal(gateway.options.at(-1)?.maxChanges, DEFAULT_MAX_CHANGES_PER_SYNC);
-  assert.deepEqual(sourceKeys(gateway), [["Notes.md::standup", "Standup", "created-1"]]);
+  assert.deepEqual(sourceKeys(gateway), [["Notes.md::line-1-1", "Standup", "created-1"]]);
   plugin.onunload();
 });
 
 test("manual, periodic, and incremental sync triggers run serially", async () => {
   const gateway = new BlockingGateway();
   const { plugin, vault, timers } = setup(gateway);
-  vault.set("Initial.md", "Initial #gcal:2026-08-18 #gcal-id:initial");
+  vault.set("Initial.md", "Initial `gcal:2026-08-18`");
   await plugin.onload();
 
   const manualSync = plugin.syncNow(false);
   await gateway.waitForStarts(1);
   timers.runIntervals();
-  const createdFile = vault.set("Created.md", "Created #gcal:2026-08-19 #gcal-id:created");
+  const createdFile = vault.set("Created.md", "Created `gcal:2026-08-19`");
   vault.emit("create", createdFile);
   timers.runTimeouts();
 
