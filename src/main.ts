@@ -332,7 +332,7 @@ export default class GcalSyncPlugin extends Plugin {
     metadata: CachedMetadata | null,
   ): Promise<{ events: VaultCalendarEvent[]; issues: ParseIssue[] }> {
     const content = await this.app.vault.cachedRead(file);
-    const frontmatter = metadata?.frontmatter as Record<string, unknown> | undefined;
+    const frontmatter = metadata?.frontmatter;
     if (!content.includes("gcal:") && frontmatter?.gcal === undefined) {
       return { events: [], issues: [] };
     }
