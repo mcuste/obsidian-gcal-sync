@@ -440,6 +440,8 @@ function apiError(prefix: string, status: number, body: string): Error {
   try {
     const parsed = JSON.parse(body) as { error?: { message?: string } | string };
     detail = typeof parsed.error === "string" ? parsed.error : (parsed.error?.message ?? body);
-  } catch {}
+  } catch {
+    // Keep the raw response body when it is not JSON.
+  }
   return new Error(`${prefix} (${status}): ${detail}`);
 }
