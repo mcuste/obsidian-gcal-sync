@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-20
+
 ### Fixed
 
 - A vault opened without the plugin's `data.json`, such as on a second machine, now takes its vault
