@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-20
+
 ### Changed
 
 - The README leads with how sync works and the event syntax, with labeled diagrams for a
