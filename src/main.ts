@@ -58,13 +58,14 @@ export interface PluginTimers {
 }
 
 export interface GcalSyncPluginDependencies {
-  createCalendarGateway?(
+  createCalendarGateway?: (
+    this: void,
     credentials: GoogleCredentials,
     calendarId: string,
     vaultId: string,
-  ): GcalGateway;
+  ) => GcalGateway;
   timers?: PluginTimers;
-  confirmPlan?(summary: ReconciliationSummary): Promise<boolean>;
+  confirmPlan?: (this: void, summary: ReconciliationSummary) => Promise<boolean>;
 }
 
 const WINDOW_TIMERS: PluginTimers = {
