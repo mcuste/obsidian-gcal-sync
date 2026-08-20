@@ -36,7 +36,7 @@ class ReconciliationModal extends Modal {
       .addButton((button) =>
         button
           .setButtonText("Apply changes")
-          .setWarning()
+          .setDestructive()
           .onClick(() => this.finish(true)),
       );
   }

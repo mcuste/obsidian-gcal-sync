@@ -267,7 +267,7 @@ export class GcalSettingTab extends PluginSettingTab {
     setting.addButton((button) =>
       button
         .setButtonText("Disconnect and revoke")
-        .setWarning()
+        .setDestructive()
         .onClick(async () => {
           button.setDisabled(true).setButtonText("Revoking…");
           try {
