@@ -2,51 +2,35 @@
 
 ## Authorization
 
-**"Google did not return a refresh token"** means Google still has an active grant for this client.
-Remove it at [myaccount.google.com/permissions](https://myaccount.google.com/permissions), then
-authorize again.
-
-**"Google OAuth token refresh failed (400): invalid_grant"** usually means the refresh token
-expired or was revoked. An External OAuth client left in **Testing** expires refresh tokens after 7
-days. Set the consent screen to **In production** to stop this, then click **Authorize again**.
-
-**"Google authorization timed out"** means the browser flow was not completed within 2 minutes.
-Click **Authorize** again.
-
-**"Google authorization was cancelled"** means you pressed the button again during sign-in, or left
-the settings tab. Nothing was saved.
-
-**"Google returned an invalid OAuth callback"** means the redirect did not match the request. Close
-any stale consent tabs and start over.
-
-**"Could not open the local OAuth callback"** means the plugin could not listen on a loopback port.
-Check whether a firewall or security tool blocks Obsidian from binding local ports.
-
-**"Authorize Google again to grant calendar selection and creation access"** appears after an
-upgrade added scopes. Click **Authorize again**.
-
-**"OAuth client ID secret is empty or missing"**, or the same for the client secret, means the
-selected Obsidian secret is empty or was deleted. Re-select or recreate it in settings.
+| Notice | What to do |
+| --- | --- |
+| "Google did not return a refresh token" | Google still has an active grant for this client. Remove it at [myaccount.google.com/permissions](https://myaccount.google.com/permissions), then authorize again. |
+| "Google OAuth token refresh failed (400): invalid_grant" | The refresh token expired or was revoked. An External client left in **Testing** expires them after 7 days, so set the consent screen to **In production**, then click **Authorize again**. |
+| "Google authorization timed out" | The browser flow was not finished within 2 minutes. Click **Authorize** again. |
+| "Google authorization was cancelled" | You pressed the button again during sign-in, or left the settings tab. Nothing was saved. |
+| "Google returned an invalid OAuth callback" | The redirect did not match the request. Close any stale consent tabs and start over. |
+| "Could not open the local OAuth callback" | The plugin could not listen on a loopback port. Check whether a firewall or security tool stops Obsidian from opening local ports. |
+| "Authorize Google again to grant calendar selection and creation access" | An upgrade added scopes. Click **Authorize again**. |
+| "OAuth client ID secret is empty or missing", or the same for the client secret | The Obsidian secret is empty or was deleted. Re-select or recreate it in settings. |
 
 ## Events are not created
 
-Work through these in order:
+Check these in order:
 
 1. The note is inside **Synced folders**, or that setting is empty.
-2. The directive is wrapped in backticks, and those backticks hold nothing but directives. A
-   directive in plain text, in a fenced code block, or in an HTML comment is ignored.
-3. No notice reported a parse problem for that note. One invalid declaration skips the whole note.
+2. The directive is inside backticks, and those backticks hold nothing but directives. A directive in
+   plain text, in a fenced code block, or in an HTML comment is ignored.
+3. No notice reported a problem with that note. One bad declaration skips the whole note.
 4. A calendar is selected under **Calendar**, and it is the one you are looking at in Google.
-5. Run **Sync now** to force a full scan and see the result in a notice.
+5. Run **Sync now** to force a full sync and read the result in the notice.
 
 ## Notices about declarations
 
-**"Some event declarations were skipped"** lists the note, the location, and the reason. Common
-reasons:
+**"Some event declarations were skipped"** names the note, the place, and the reason. Common ones:
 
 | Message | Fix |
 | --- | --- |
-| Expected a date (2026-08-18), a time (14:00), a local timestamp (2026-08-18T14:00), or one with Z or a UTC offset | The start is not one of the accepted forms. A time zone on its own, such as `+02:00`, is not a start. |
+| Expected a date (2026-08-18), a time (14:00), a local timestamp (2026-08-18T14:00), or one with Z or a UTC offset | The start is not one of the accepted forms. An offset on its own, such as `+02:00`, is not a start. |
 | Invalid time of day | The hours or minutes are out of range, for example `25:00`. |
 | Invalid calendar date | The date does not exist, for example `2026-02-30`. |
 | Invalid duration; use days, hours, and minutes such as PT90M | Use `PT30M`, `PT1H30M`, `P1DT2H`. Seconds are not accepted. |
@@ -64,42 +48,32 @@ reasons:
 
 ## Sync stopped or is waiting
 
-**"Google Calendar sync needs review"** means the plan deletes 5 or more events or changes 25 or
-more, and a background sync cannot ask you. Run **Sync now** to see the counts and approve or
-cancel.
-
-**"...changes exceed the per-sync limit of 200"** means nothing was applied. Check which notes
-produced that many events. Raise **Change limit per sync** if the change is intended.
-
-**"N deletion(s) held back until every note parses"** means a note could not be read, so deletions
-were skipped for safety. Fix the reported note and sync again.
+| Notice | What it means |
+| --- | --- |
+| "Google Calendar sync needs review" | The sync deletes 5 or more events, or changes 25 or more, and a background sync cannot ask you. Run **Sync now** to see the counts and approve or cancel. |
+| "…changes exceed the per-sync limit of 200" | Nothing was applied. Check which notes made that many events, and raise **Change limit per sync** if the change is intended. |
+| "N deletion(s) held back until every note parses" | A note could not be read, so deletions were skipped to be safe. Fix the note named in the notice and sync again. |
 
 ## Duplicate or recreated events
 
 **An event was recreated instead of moved.** Moving a line, reordering declarations, and renaming a
 note are all safe on their own. The two cases that recreate an event are a declaration that moves
-**and** changes content in the same sync, and two identical events, where the match is ambiguous.
-See [How an event keeps its identity](how-sync-works.md#how-an-event-keeps-its-identity).
+**and** changes in the same sync, and two identical events, where the match is ambiguous. See
+[How an event keeps its identity](how-sync-works.md#how-an-event-keeps-its-identity).
 
-**An event written as a bare time reappeared today.** A time with no date keeps the date of the
-event on Google. Delete that event and there is no date left to read, so the next sync recreates it
-at today's date. Write the date out if it should stay on a fixed day.
+**An event written as a bare time came back today.** A time with no date keeps the date of the event
+on Google. Delete that event and there is no date left to read, so the next sync makes it again at
+today's date. Write the date out if it should stay on a fixed day.
 
 ## Other
 
-**Nothing works on mobile.** The plugin is desktop only, because sign-in needs a local callback
-server.
-
-**"Could not load calendars"** on the calendar dropdown means the API call failed. Retry, and if it
-persists, confirm the Google Calendar API is still enabled on your Cloud project and authorize
-again.
-
-**Markers have no color.** `styles.css` is missing from the plugin folder, which only happens after
-installing by hand. Copy it in alongside `main.js` and `manifest.json`.
-
-**Events remain after uninstalling.** They are ordinary Google Calendar events. Delete them in
-Google, or delete the declarations and sync before uninstalling.
+| Problem | Cause |
+| --- | --- |
+| Nothing works on mobile | The plugin is desktop only, because sign-in needs a local callback server. |
+| "Could not load calendars" | The API call failed. Retry, and if it keeps failing, check that the Google Calendar API is still enabled on your Cloud project and authorize again. |
+| Markers have no color | `styles.css` is missing from the plugin folder, which only happens after installing by hand. Copy it in next to `main.js` and `manifest.json`. |
+| Events remain after uninstalling | They are ordinary Google Calendar events. Delete them in Google, or delete the declarations and sync before uninstalling. |
 
 Still stuck? Open an issue at
 [github.com/mcuste/obsidian-gcal-sync/issues](https://github.com/mcuste/obsidian-gcal-sync/issues)
-with the notice text and a minimal example of the declaration.
+with the notice text and a small example of the declaration.

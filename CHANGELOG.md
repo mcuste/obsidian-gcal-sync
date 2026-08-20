@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- The README leads with how sync works and the event syntax, with labeled diagrams for a
+  declaration and the sync flow, and no longer carries an install section.
+- The docs are shorter and use plainer wording. Settings and troubleshooting are now reference
+  tables. No behavior changed.
+
 ## [0.3.1] - 2026-08-20
 
 ### Fixed
