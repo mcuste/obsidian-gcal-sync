@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { get } from "node:http";
-import test from "node:test";
+import { after, test } from "node:test";
 import {
   AUTHORIZATION_CANCELLED_MESSAGE,
   AUTHORIZATION_TIMEOUT_MS,
@@ -13,6 +13,13 @@ interface HttpResult {
   status: number;
   body: string;
 }
+
+const originalWindow = globalThis.window;
+Object.defineProperty(globalThis, "window", { configurable: true, value: globalThis });
+after(() => {
+  if (originalWindow) Object.defineProperty(globalThis, "window", { value: originalWindow });
+  else Reflect.deleteProperty(globalThis, "window");
+});
 
 type ExchangeInput = Parameters<GoogleAuthorizationDependencies["exchangeCode"]>[0];
 

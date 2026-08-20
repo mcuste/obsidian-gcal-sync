@@ -33,9 +33,10 @@ export interface DirectiveStatusSource {
 }
 
 function buildMarker(status: DirectiveStatus): HTMLElement {
-  const marker = document.createElement("span");
-  marker.addClass("gcal-directive-status", `gcal-directive-status-${status}`);
-  marker.setAttribute("aria-label", LABELS[status]);
+  const marker = createSpan({
+    cls: ["gcal-directive-status", `gcal-directive-status-${status}`],
+    attr: { "aria-label": LABELS[status] },
+  });
   setIcon(marker, ICONS[status]);
   return marker;
 }
