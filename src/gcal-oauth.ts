@@ -153,7 +153,7 @@ async function withDeadline<T>(
   try {
     return await Promise.race([promise, stopped.promise]);
   } finally {
-    clearTimeout(timeout);
+    window.clearTimeout(timeout);
     signal?.removeEventListener("abort", cancel);
   }
 }
