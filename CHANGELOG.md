@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-20
+
 ### Changed
 
 - The settings tab is built with Obsidian's declarative settings API, so its settings are found by
