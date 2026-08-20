@@ -13,6 +13,9 @@ All notable changes to this project are documented in this file. The format foll
 - An unrecognized event time zone, or an interval or change limit below 1, is rejected with a
   message under the setting instead of being ignored.
 - `minAppVersion` is now 1.13.0, the first Obsidian version with the declarative settings API.
+- OAuth authorization deadlines use the active window's timers, so sign-in also works from a
+  popout window.
+- Status markers and destructive actions use Obsidian's current UI helpers and button styling.
 
 ## [0.1.0] - 2026-08-19
 
