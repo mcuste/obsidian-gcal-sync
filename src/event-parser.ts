@@ -81,6 +81,7 @@ const LOCAL_TIME = /^\d{2}:\d{2}$/;
  * rather than turning the whole declaration inert.
  */
 const DIRECTIVE_SPAN = /^\s*(?:gcal(?:-[a-z]+)?:[^\s`]+\s*)+$/i;
+const DIRECTIVE_TEXT = /gcal(?:-[a-z]+)?:/i;
 const DIRECTIVE_START = /[\s](?=gcal(?:-[a-z]+)?:)/gi;
 const ENTRY_FIELDS = ["when", "title", "repeat"];
 const DURATION = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/;
@@ -562,11 +563,7 @@ export function findLineDirectives(
   let occurrence = 0;
 
   for (const span of directiveSpans(line)) {
-    // A directive span holds no backticks of its own, so blanking them leaves the delimiters
-    // as the whitespace that markDirectives turns into the sentinel.
-    const marked = markDirectives(line.slice(span.from, span.to).replaceAll("`", " "));
-    const events =
-      marked.match(EVENT_DIRECTIVE)?.length || marked.match(REPEAT_DIRECTIVES)?.length || 0;
+    const events = countDeclarations(line.slice(span.from, span.to));
     if (events === 0) continue;
     occurrence += events;
     found.push({ from: span.from, to: span.to, occurrence: occurrence - events + 1 });
@@ -574,9 +571,28 @@ export function findLineDirectives(
   return found;
 }
 
+/**
+ * Whether a note is worth parsing at all. `gcal-repeat:` counts, because a repeat on its own
+ * declares an event.
+ */
+export function hasDirectiveText(content: string): boolean {
+  return DIRECTIVE_TEXT.test(content);
+}
+
 /** True when a rendered code span's text is a declaration rather than prose about one. */
 export function isDirectiveSpanText(text: string): boolean {
-  return DIRECTIVE_SPAN.test(text) && EVENT_DIRECTIVE.test(markDirectives(` ${text} `));
+  return DIRECTIVE_SPAN.test(text) && countDeclarations(text) > 0;
+}
+
+/**
+ * How many events a span declares. A repeat next to `gcal:` belongs to that event, so events count
+ * first. Uses `String.match`, since `RegExp.test` would carry its position between calls.
+ */
+function countDeclarations(spanText: string): number {
+  // A span holds no backticks of its own, so blanking them leaves the delimiters as the space
+  // markDirectives needs in front of a directive.
+  const marked = markDirectives(` ${spanText.replaceAll("`", " ")} `);
+  return marked.match(EVENT_DIRECTIVE)?.length || marked.match(REPEAT_DIRECTIVES)?.length || 0;
 }
 
 /** The inline-code spans on a line that hold nothing but directives, delimiters included. */

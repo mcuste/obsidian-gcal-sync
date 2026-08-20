@@ -8,7 +8,12 @@ import {
 } from "obsidian";
 import { confirmReconciliation } from "./confirm-modal";
 import { directiveStatusExtension, directiveStatusPostProcessor } from "./directive-status";
-import { type ParseIssue, parseVaultEvents, type VaultCalendarEvent } from "./event-parser";
+import {
+  hasDirectiveText,
+  type ParseIssue,
+  parseVaultEvents,
+  type VaultCalendarEvent,
+} from "./event-parser";
 import {
   DEFAULT_MAX_CHANGES_PER_SYNC,
   GcalClient,
@@ -334,7 +339,7 @@ export default class GcalSyncPlugin extends Plugin {
   ): Promise<{ events: VaultCalendarEvent[]; issues: ParseIssue[] }> {
     const content = await this.app.vault.cachedRead(file);
     const frontmatter = metadata?.frontmatter;
-    if (!content.includes("gcal:") && frontmatter?.gcal === undefined) {
+    if (!hasDirectiveText(content) && frontmatter?.gcal === undefined) {
       return { events: [], issues: [] };
     }
     return parseVaultEvents({

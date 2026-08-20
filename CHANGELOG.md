@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- A note whose only declaration is a repeat on its own, such as `` `gcal-repeat:daily` ``, now
+  syncs. The note was skipped before it was ever parsed, because the check for whether a note is
+  worth parsing looked for `gcal:` only.
+- Reading view now marks a declaration written as a repeat on its own, such as
+  `` `gcal-repeat:daily` ``, and no longer drops the markers on every declaration in a section after
+  the first one.
+
 ## [0.3.3] - 2026-08-20
 
 ### Fixed

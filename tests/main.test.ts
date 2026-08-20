@@ -431,6 +431,19 @@ test("full lifecycle scan creates, updates, and deletes managed events", async (
   plugin.onunload();
 });
 
+test("a note whose only declaration is a repeat still syncs", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault } = setup(gateway);
+  // The note never spells out "gcal:", which used to make the plugin skip it without parsing.
+  vault.set("Notes.md", "Theory Practice `gcal-repeat:daily`");
+
+  await plugin.onload();
+  await plugin.syncNow(false);
+
+  assert.deepEqual(sourceKeys(gateway), [["Notes.md::line-1-1", "Theory Practice", "created-1"]]);
+  plugin.onunload();
+});
+
 test("deleting a note removes cached source keys without touching unrelated events", async () => {
   const gateway = new InMemoryGateway();
   const { plugin, vault, workspace, timers } = setup(gateway);

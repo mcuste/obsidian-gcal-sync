@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   findLineDirectives,
+  isDirectiveSpanText,
   MAX_EVENTS_PER_NOTE,
   makeRemoteEventId,
   makeRemoteSourceKey,
@@ -442,6 +443,15 @@ test("declaration ranges cover the backticks so a marker can sit after them", ()
 
   assert.ok(found);
   assert.equal(line.slice(found.from, found.to), "`gcal:2026-08-18T14:00`");
+});
+
+test("Reading view marks every declaration, including a repeat on its own", () => {
+  // Called once per code span, so a left-over match position dropped the later markers.
+  assert.equal(isDirectiveSpanText("gcal:2026-08-18"), true);
+  assert.equal(isDirectiveSpanText("gcal:2026-08-19"), true);
+  assert.equal(isDirectiveSpanText("gcal-repeat:daily"), true);
+  assert.equal(isDirectiveSpanText("gcal:2026-08-18 gcal-repeat:daily"), true);
+  assert.equal(isDirectiveSpanText("Standup gcal:2026-08-18"), false);
 });
 
 test("a note property entry can carry its own when, title, and repeat", () => {
