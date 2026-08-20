@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   type App,
   type ButtonComponent,
@@ -48,6 +49,15 @@ export function defaultSettings(vaultId: string): GcalSyncSettings {
     syncFolders: [],
     maxChangesPerSync: DEFAULT_MAX_CHANGES_PER_SYNC,
   };
+}
+
+/**
+ * ID this vault stamps on its events. Taken from the vault name so a vault opened without the
+ * plugin's data.json keeps the same ID and finds its events instead of duplicating them. The name
+ * is hashed, so it never reaches Google.
+ */
+export function deriveVaultId(vaultName: string): string {
+  return createHash("sha256").update(vaultName).digest("base64url").slice(0, 22);
 }
 
 export function systemTimeZone(): string {

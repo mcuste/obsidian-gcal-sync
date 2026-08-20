@@ -59,6 +59,11 @@ calendar, covered in [Security and privacy](security-and-privacy.md#trust-model)
 
 ## Where settings live
 
-Plain settings sit in `<vault>/.obsidian/plugins/gcal-sync/data.json`, including a random vault ID
-that marks the events belonging to this vault. Credentials and the refresh token are kept in
-Obsidian's secret storage, outside the vault.
+Plain settings sit in `<vault>/.obsidian/plugins/gcal-sync/data.json`, including the vault ID that
+marks the events belonging to this vault. Credentials and the refresh token are kept in Obsidian's
+secret storage, outside the vault.
+
+The vault ID is a hash of the vault name, so a vault opened where that `data.json` is missing finds
+its events instead of duplicating them. An ID already stored is left alone. Vaults with different
+names stay separate on one calendar, so renaming a vault leaves its old events behind: sync once
+from the old name first, or delete them in Google Calendar.

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   type App,
   type CachedMetadata,
@@ -21,6 +20,7 @@ import {
 } from "./gcal";
 import {
   defaultSettings,
+  deriveVaultId,
   GcalSettingTab,
   type GcalSyncSettings,
   resolveTimeZone,
@@ -237,7 +237,7 @@ export default class GcalSyncPlugin extends Plugin {
 
   private async loadSettings(): Promise<void> {
     const stored = (await this.loadData()) as Partial<GcalSyncSettings> | null;
-    const vaultId = stored?.vaultId || randomUUID();
+    const vaultId = stored?.vaultId || deriveVaultId(this.app.vault.getName());
     const defaults = defaultSettings(vaultId);
     const settings = Object.assign(defaults, stored ?? {}, { vaultId });
     settings.syncFolders = Array.isArray(settings.syncFolders)

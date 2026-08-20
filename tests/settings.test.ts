@@ -3,6 +3,7 @@ import test from "node:test";
 import { DEFAULT_MAX_CHANGES_PER_SYNC } from "../src/gcal";
 import {
   defaultSettings,
+  deriveVaultId,
   parseSyncFolders,
   resolveTimeZone,
   systemTimeZone,
@@ -27,4 +28,10 @@ test("an empty event time zone follows this device", () => {
   assert.equal(defaultSettings("vault-id").timeZone, "");
   assert.equal(resolveTimeZone(""), systemTimeZone());
   assert.equal(resolveTimeZone("Asia/Tokyo"), "Asia/Tokyo");
+});
+
+test("the vault ID follows the vault name", () => {
+  assert.equal(deriveVaultId("Notes"), deriveVaultId("Notes"));
+  assert.notEqual(deriveVaultId("Notes"), deriveVaultId("Work"));
+  assert.match(deriveVaultId("Notes"), /^[A-Za-z0-9_-]{22}$/);
 });

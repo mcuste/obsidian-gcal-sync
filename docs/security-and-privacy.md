@@ -8,7 +8,7 @@ Only what is needed to build the event on Google Calendar:
 - Start time, end time, and the time zone they are read in.
 - The recurrence rule, if any.
 - A SHA-256 hash of the vault ID and the note path with locator, used to recognize the event later.
-- A random ID for this vault.
+- The vault ID, a SHA-256 hash of the vault name.
 
 Note paths, folder names, tags, and the rest of your note content are never uploaded. Titles go up
 exactly as written, so avoid putting anything sensitive in front of a declaration.

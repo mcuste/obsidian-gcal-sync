@@ -50,6 +50,14 @@ class TestEmitter {
 class TestVault extends TestEmitter {
   private readonly files = new Map<string, { file: TFile; content: string }>();
 
+  constructor(private readonly name = "Notes") {
+    super();
+  }
+
+  getName(): string {
+    return this.name;
+  }
+
   set(path: string, content: string): TFile {
     const file = new RuntimeTFile(path);
     this.files.set(path, { file, content });
@@ -355,13 +363,14 @@ function setup(
   gateway: GcalGateway,
   storedSettings: Partial<GcalSyncSettings> = {},
   confirmPlan?: (summary: ReconciliationSummary) => Promise<boolean>,
+  vaultName?: string,
 ): {
   plugin: GcalSyncPlugin;
   vault: TestVault;
   workspace: TestWorkspace;
   timers: TestTimers;
 } {
-  const vault = new TestVault();
+  const vault = new TestVault(vaultName);
   const workspace = new TestWorkspace();
   const timers = new TestTimers();
   const metadataCache = new TestEmitter() as TestEmitter & {
@@ -600,4 +609,26 @@ test("manual, periodic, and incremental sync triggers run serially", async () =>
   assert.equal(gateway.maxActive, 1);
   assert.deepEqual(gateway.kinds, ["full", "full", "incremental"]);
   plugin.onunload();
+});
+
+test("a vault opened without stored plugin data reuses its events", async () => {
+  const gateway = new InMemoryGateway();
+  const first = setup(gateway, { vaultId: "" });
+  first.vault.set("Meeting.md", "Standup `gcal:2026-08-18`");
+  await first.plugin.onload();
+  first.workspace.ready();
+  await gateway.waitForCompleted(1);
+  first.plugin.onunload();
+
+  const second = setup(gateway, { vaultId: "" });
+  second.vault.set("Meeting.md", "Standup `gcal:2026-08-18`");
+  await second.plugin.onload();
+  second.workspace.ready();
+  await gateway.waitForCompleted(2);
+
+  assert.deepEqual(
+    gateway.state().map(([, summary, id]) => [summary, id]),
+    [["Standup", "created-1"]],
+  );
+  second.plugin.onunload();
 });

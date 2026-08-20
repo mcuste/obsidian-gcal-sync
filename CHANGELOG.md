@@ -6,6 +6,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- A vault opened without the plugin's `data.json`, such as on a second machine, now takes its vault
+  ID from the vault name instead of a random one, so it finds its events instead of duplicating
+  them. A stored vault ID is left alone.
+
 ## [0.3.0] - 2026-08-20
 
 ### Added

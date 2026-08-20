@@ -23,9 +23,9 @@ Only one sync runs at a time. The rest queue.
 
 ## What the plugin can touch
 
-Every event the plugin creates carries three private markers: a flag, this vault's random ID, and a
-hashed key identifying the declaration it came from. Each sync lists only events carrying this
-vault's ID, then re-checks both markers before planning anything.
+Every event the plugin creates carries three private markers: a flag, this vault's ID, which is a
+hash of the vault name, and a hashed key identifying the declaration it came from. Each sync lists
+only events carrying this vault's ID, then re-checks both markers before planning anything.
 
 Events you create in Google Calendar carry none of these, so they are invisible to the plugin. So
 are events synced from a different vault, even on the same calendar.
