@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-20
+
 ### Fixed
 
 - Two devices syncing the same vault no longer duplicate events. Each declaration now reserves the
