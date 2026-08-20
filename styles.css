@@ -1,4 +1,4 @@
-/* Markers Google Calendar Sync attaches to each declaration in a note. */
+/* Markers Google Calendar Sync attaches to a declaration it leaves as written. */
 .gcal-directive-status {
   display: inline-flex;
   vertical-align: text-bottom;
@@ -32,4 +32,87 @@
 
 .gcal-directive-error {
   border-bottom-color: var(--text-error);
+}
+
+/* The chip a rendered declaration is drawn as. */
+.gcal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0 0.45em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background-color: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--font-smaller);
+  line-height: 1.5;
+  vertical-align: baseline;
+  white-space: nowrap;
+  cursor: var(--cursor);
+}
+
+.gcal-chip:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.gcal-chip:focus-visible {
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+  outline: none;
+}
+
+.gcal-chip .svg-icon {
+  width: 0.95em;
+  height: 0.95em;
+}
+
+.gcal-chip-icon {
+  display: inline-flex;
+}
+
+.gcal-chip-synced .gcal-chip-icon {
+  color: var(--color-green);
+}
+
+.gcal-chip-pending .gcal-chip-icon {
+  color: var(--text-muted);
+}
+
+.gcal-chip-blocked .gcal-chip-icon {
+  color: var(--text-warning);
+}
+
+.gcal-chip-error .gcal-chip-icon {
+  color: var(--text-error);
+}
+
+.gcal-chip-repeat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  color: var(--text-muted);
+}
+
+/* Separates the repeat from the date without adding a character to select. */
+.gcal-chip-repeat::before {
+  content: "·";
+  margin-inline-end: 0.05em;
+}
+
+/* Reading view keeps the text beside the chip, since there is no cursor to bring it back. */
+.gcal-declaration.is-open > .gcal-chip,
+.gcal-declaration:not(.is-open) > .gcal-declaration-source {
+  display: none;
+}
+
+/* The chips drawn over the gcal property in Obsidian's properties widget. */
+.gcal-property-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35em;
+  padding: var(--metadata-input-padding, 0);
+}
+
+.metadata-property-value.gcal-property-open > .gcal-property-chips,
+.metadata-property-value:not(.gcal-property-open) > .gcal-property-source {
+  display: none;
 }

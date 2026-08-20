@@ -7,13 +7,19 @@ import {
   TFile,
 } from "obsidian";
 import { confirmReconciliation } from "./confirm-modal";
-import { directiveStatusExtension, directiveStatusPostProcessor } from "./directive-status";
+import {
+  type DirectiveView,
+  directiveStatusExtension,
+  directiveStatusPostProcessor,
+} from "./directive-status";
+import type { DisplayOptions } from "./event-display";
 import {
   hasDirectiveText,
   type ParseIssue,
   parseVaultEvents,
   type VaultCalendarEvent,
 } from "./event-parser";
+import { FrontmatterPropertyChips } from "./frontmatter-properties";
 import {
   DEFAULT_MAX_CHANGES_PER_SYNC,
   GcalClient,
@@ -55,6 +61,10 @@ function placementKey(path: string, line: number, occurrence: number): string {
   return `${path}\u0000${line}\u0000${occurrence}`;
 }
 
+function entryKey(path: string, entryIndex: number): string {
+  return `${path}\u0000frontmatter\u0000${entryIndex}`;
+}
+
 export interface PluginTimers {
   setTimeout(callback: () => void, milliseconds: number): number;
   clearTimeout(timer: number): void;
@@ -92,7 +102,9 @@ export default class GcalSyncPlugin extends Plugin {
   private syncedSourceKeys = new Set<string>();
   private erroredPaths = new Set<string>();
   private erroredPlacements = new Set<string>();
-  private sourceKeyByPlacement = new Map<string, string>();
+  private erroredEntries = new Set<string>();
+  private eventByPlacement = new Map<string, VaultCalendarEvent>();
+  private eventByEntry = new Map<string, VaultCalendarEvent>();
   private readonly statusListeners = new Set<() => void>();
   private readonly createCalendarGateway: NonNullable<
     GcalSyncPluginDependencies["createCalendarGateway"]
@@ -145,6 +157,9 @@ export default class GcalSyncPlugin extends Plugin {
 
     this.registerEditorExtension(directiveStatusExtension(this));
     this.registerMarkdownPostProcessor(directiveStatusPostProcessor(this));
+    new FrontmatterPropertyChips(this, this, (redraw) => {
+      this.timers.setTimeout(redraw, 0);
+    }).load();
 
     this.resetPeriodicSync();
     this.app.workspace.onLayoutReady(() => void this.syncNow(false));
@@ -159,14 +174,49 @@ export default class GcalSyncPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  directiveStatus(path: string, line: number, occurrence: number): DirectiveStatus | undefined {
+  directiveAt(path: string, line: number, occurrence: number): DirectiveView | undefined {
     const key = placementKey(path, line, occurrence);
-    if (this.erroredPlacements.has(key)) return "error";
-    if (this.erroredPaths.has(path)) return "blocked";
+    return this.declarationAt(path, key, this.eventByPlacement, this.erroredPlacements);
+  }
 
-    const sourceKey = this.sourceKeyByPlacement.get(key);
-    if (!sourceKey) return undefined;
-    return this.syncedSourceKeys.has(sourceKey) ? "synced" : "pending";
+  frontmatterAt(path: string, entryIndex: number): DirectiveView | undefined {
+    const key = entryKey(path, entryIndex);
+    return this.declarationAt(path, key, this.eventByEntry, this.erroredEntries);
+  }
+
+  /**
+   * A note syncs all or nothing, so a declaration beside a broken one is "blocked". It keeps its
+   * last parsed event, since that is what is still on the calendar.
+   */
+  private declarationAt(
+    path: string,
+    key: string,
+    events: ReadonlyMap<string, VaultCalendarEvent>,
+    errored: ReadonlySet<string>,
+  ): DirectiveView | undefined {
+    if (errored.has(key)) return { status: "error" };
+
+    const event = events.get(key);
+    if (this.erroredPaths.has(path)) return { status: "blocked", ...(event ? { event } : {}) };
+    if (!event) return undefined;
+    return { status: this.syncedSourceKeys.has(event.sourceKey) ? "synced" : "pending", event };
+  }
+
+  displayOptions(): DisplayOptions {
+    return { timeZone: resolveTimeZone(this.settings.timeZone) };
+  }
+
+  chipsEnabled(): boolean {
+    return this.settings.renderDeclarations;
+  }
+
+  /**
+   * Obsidian only leaves the properties in the editor text with "Properties in document" on Source.
+   * `getConfig` is not part of the plugin API, so no answer means the text is left as written.
+   */
+  propertiesInEditor(): boolean {
+    const vault = this.app.vault as { getConfig?: (key: string) => unknown };
+    return vault.getConfig?.("propertiesInDocument") === "source";
   }
 
   onStatusChange(listener: () => void): () => void {
@@ -177,32 +227,55 @@ export default class GcalSyncPlugin extends Plugin {
   private publishStatus(scan: VaultScan, affectedKeys?: ReadonlySet<string>): void {
     const errored = new Set(scan.unknownPaths);
     const erroredPlacements = new Set<string>();
+    const erroredEntries = new Set<string>();
     for (const issue of scan.issues) {
       errored.add(issue.sourcePath);
-      if (!issue.placement) continue;
-      const { line, occurrence } = issue.placement;
-      erroredPlacements.add(placementKey(issue.sourcePath, line, occurrence));
+      if (issue.placement) {
+        const { line, occurrence } = issue.placement;
+        erroredPlacements.add(placementKey(issue.sourcePath, line, occurrence));
+      }
+      if (issue.entryIndex !== undefined) {
+        erroredEntries.add(entryKey(issue.sourcePath, issue.entryIndex));
+      }
     }
     this.erroredPaths = errored;
     this.erroredPlacements = erroredPlacements;
+    this.erroredEntries = erroredEntries;
 
-    this.sourceKeyByPlacement = new Map();
+    this.eventByPlacement = new Map();
+    this.eventByEntry = new Map();
     for (const [path, events] of scan.eventsByPath) {
       for (const event of events) {
-        if (!event.placement) continue;
-        const { line, occurrence } = event.placement;
-        this.sourceKeyByPlacement.set(placementKey(path, line, occurrence), event.sourceKey);
+        if (event.placement) {
+          const { line, occurrence } = event.placement;
+          this.eventByPlacement.set(placementKey(path, line, occurrence), event);
+        } else if (event.entryIndex !== undefined) {
+          this.eventByEntry.set(entryKey(path, event.entryIndex), event);
+        }
       }
     }
 
     if (affectedKeys) for (const key of affectedKeys) this.syncedSourceKeys.delete(key);
+    this.notifyStatusChange();
+  }
+
+  private notifyStatusChange(): void {
     for (const listener of this.statusListeners) listener();
+  }
+
+  /** Redraws every open note. Live Preview follows a status change itself; Reading view does not. */
+  refreshDeclarations(): void {
+    this.notifyStatusChange();
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view as { previewMode?: { rerender(full?: boolean): void } };
+      view.previewMode?.rerender(true);
+    }
   }
 
   private recordSynced(keys: readonly string[], replaceAll: boolean): void {
     if (replaceAll) this.syncedSourceKeys = new Set(keys);
     else for (const key of keys) this.syncedSourceKeys.add(key);
-    for (const listener of this.statusListeners) listener();
+    this.notifyStatusChange();
   }
 
   resetPeriodicSync(): void {

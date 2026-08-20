@@ -190,15 +190,54 @@ Standup `gcal:2026-08-18T09:15/PT15M gcal-repeat:weekdays`
 Rent `gcal:2026-09-01 gcal-repeat:FREQ=MONTHLY;BYMONTHDAY=1`
 ```
 
-## Status markers
+## How a declaration is shown
 
-Each declaration gets a small calendar icon in Live Preview and Reading view, so you can see whether
-it reached Google. The text is left exactly as you wrote it, so the cursor and selection keep working
-inside it. Only the icon is added.
+A declaration you are not editing becomes a chip with the date, the time, and the repeat in words,
+led by an icon showing whether it reached Google:
 
-![Two notes side by side, one with synced and pending markers, one with a broken declaration](images/status-markers.png)
+```markdown
+- [ ] Design review `gcal:2026-08-18T14:00/PT1H gcal-repeat:weekdays`
+```
 
-| Marker | Meaning |
+> - [ ] Design review  &nbsp;`✅ Tue 18 Aug, 14:00–15:00 · ↻ Mon–Fri`
+
+Click a chip to get the text back and edit it. In Live Preview the cursor lands in the declaration
+and the chip returns when you move away. In Reading view clicking swaps between the two.
+
+The text still shows while the cursor is inside it, and when the declaration could not be read, so a
+typo shows you the typo. Turn **Render declarations** off to always see the text.
+
+A chip shows what the plugin understood, so a wrong date or repeat shows up before your calendar
+does.
+
+| Wording | Meaning |
+| --- | --- |
+| `Today`, `Tomorrow`, `Yesterday` | A one-off event on that day. A repeating one shows its date, since the rule says when it happens. |
+| `Tue 18 Aug` | An all-day event. No weekday when it repeats. |
+| `18 – 20 Aug` | An all-day event over several days, ending on the last day it covers. |
+| `Tue 18 Aug, 14:00–15:00` | A timed event, in the event time zone. |
+| `Mon–Fri`, `every 2 weeks`, `monthly on day 1` | The repeat rule in words. |
+| `FREQ=WEEKLY;UNTIL=…` | A rule too detailed to put in words, shown as you wrote it. |
+
+Dates and times follow your system language and region.
+
+### Note properties
+
+The `gcal` property gets the same chips. Where depends on Obsidian's **Properties in document**
+setting:
+
+| Setting | What you get |
+| --- | --- |
+| Source | The properties stay as YAML, and each start becomes a chip. |
+| Visible | `gcal` becomes chips when it holds one value or a list of maps. |
+| Hidden | Nothing to draw. |
+
+Under **Visible**, a `gcal` that Obsidian has typed as a date or a list of text keeps Obsidian's own
+field, which already reads well and can be edited.
+
+### Status icons
+
+| Icon | Meaning |
 | --- | --- |
 | Green tick | The event is on your calendar. |
 | Grey clock | Read correctly, but not synced yet. The sync is queued, or not set up. |

@@ -52,6 +52,8 @@ export class Plugin {
 
   registerEvent(_event: unknown): void {}
 
+  register(_cleanup: () => void): void {}
+
   registerEditorExtension(_extension: unknown): void {}
 
   registerMarkdownPostProcessor(_processor: unknown): void {}

@@ -34,6 +34,8 @@ export interface GcalSyncSettings {
   syncFolders: string[];
   /** Ceiling on how many events one sync may create, update, and delete. */
   maxChangesPerSync: number;
+  /** Draws each declaration as a chip instead of leaving it as written. */
+  renderDeclarations: boolean;
 }
 
 export function defaultSettings(vaultId: string): GcalSyncSettings {
@@ -48,6 +50,7 @@ export function defaultSettings(vaultId: string): GcalSyncSettings {
     vaultId,
     syncFolders: [],
     maxChangesPerSync: DEFAULT_MAX_CHANGES_PER_SYNC,
+    renderDeclarations: true,
   };
 }
 
@@ -98,6 +101,7 @@ export class GcalSettingTab extends PluginSettingTab {
     return [
       this.googleOAuthGroup(),
       this.calendarSyncGroup(),
+      this.inNotesGroup(),
       eventSyntaxGroup(),
       trustModelGroup(),
     ];
@@ -115,6 +119,8 @@ export class GcalSettingTab extends PluginSettingTab {
         return settings.syncFolders.join("\n");
       case "maxChangesPerSync":
         return settings.maxChangesPerSync;
+      case "renderDeclarations":
+        return settings.renderDeclarations;
       default:
         return undefined;
     }
@@ -135,12 +141,16 @@ export class GcalSettingTab extends PluginSettingTab {
       case "maxChangesPerSync":
         settings.maxChangesPerSync = Number(value);
         break;
+      case "renderDeclarations":
+        settings.renderDeclarations = Boolean(value);
+        break;
       default:
         return;
     }
 
     await this.plugin.saveSettings();
     if (key === "syncIntervalMinutes") this.plugin.resetPeriodicSync();
+    if (key === "renderDeclarations") this.plugin.refreshDeclarations();
   }
 
   private googleOAuthGroup(): SettingDefinitionGroup {
@@ -242,6 +252,25 @@ export class GcalSettingTab extends PluginSettingTab {
           name: "Sync now",
           desc: "Scans every Markdown note and reconciles all managed Google Calendar events.",
           render: (setting) => this.renderSyncNow(setting),
+        },
+      ],
+    };
+  }
+
+  private inNotesGroup(): SettingDefinitionGroup {
+    return {
+      type: "group",
+      heading: "In your notes",
+      items: [
+        {
+          name: "Render declarations",
+          desc:
+            "Shows each declaration as a chip with its date, time, and repeat in words. " +
+            "Click a chip to get the text back and edit it. Off always shows the text.",
+          control: {
+            type: "toggle",
+            key: "renderDeclarations",
+          },
         },
       ],
     };

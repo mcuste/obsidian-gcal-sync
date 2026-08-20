@@ -98,6 +98,15 @@ class TestWorkspace {
   ready(): void {
     for (const callback of this.callbacks.splice(0)) callback();
   }
+
+  /** The properties-widget chips listen here and read the open notes. */
+  on(): { unload(): void } {
+    return { unload() {} };
+  }
+
+  getLeavesOfType(): unknown[] {
+    return [];
+  }
 }
 
 class TestTimers implements PluginTimers {

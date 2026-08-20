@@ -28,7 +28,11 @@ after a build. Reload the plugin in Obsidian to pick up a rebuild.
 | `src/gcal.ts` | Google Calendar and OAuth token HTTP calls. |
 | `src/gcal-oauth.ts` | Authorization code flow with PKCE and the loopback callback. |
 | `src/settings.ts` | Settings tab. |
-| `src/directive-status.ts` | Status markers in Live Preview and Reading view. |
+| `src/directive-status.ts` | Declarations in Live Preview and Reading view. |
+| `src/directive-chip.ts` | The chip element, shared by every place one is drawn. |
+| `src/event-display.ts` | Turns an event into the date, time, and repeat a chip shows. |
+| `src/frontmatter-scan.ts` | Finds the starts written in the note properties text. |
+| `src/frontmatter-properties.ts` | Chips inside Obsidian's properties widget. |
 | `src/confirm-modal.ts` | Approval dialog for large or destructive syncs. |
 
 Tests live in `tests/` and run on the Node test runner through tsx. `tests/obsidian-stub.ts` stands in

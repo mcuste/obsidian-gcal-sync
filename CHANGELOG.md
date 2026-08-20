@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- A declaration you are not editing now becomes a chip with the date, the time, and the repeat in
+  words, led by the sync icon, instead of the text with an icon after it. Click a chip to get the
+  text back and edit it. The text still shows while the cursor is inside it, and when the
+  declaration could not be read.
+- The `gcal` note property gets the same chips: over the YAML with **Properties in document** on
+  Source, and over Obsidian's `gcal` field on Visible, when it holds one value or a list of maps.
+- **Render declarations**, a new setting, on by default. Turn it off to always see the text.
+
 ## [0.3.4] - 2026-08-20
 
 ### Fixed

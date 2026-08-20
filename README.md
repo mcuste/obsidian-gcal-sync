@@ -38,9 +38,10 @@ your notes ──> plugin compares ──> Google Calendar
 - It only touches events it created, so your other Google Calendar events are safe, even on the
   same calendar.
 
-The icon after each line shows whether the event reached Google: a green tick means yes, a grey
-clock means not yet, a red cross means something is wrong. See
-[status markers](docs/event-syntax.md#status-markers).
+A declaration you are not editing becomes a chip with the date, the time, and the repeat in words,
+led by an icon: a green tick means the event reached Google, a grey clock means not yet, a red cross
+means something is wrong. Click a chip to get the text back and edit it. See
+[how a declaration is shown](docs/event-syntax.md#how-a-declaration-is-shown).
 
 ## Syntax
 

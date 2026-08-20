@@ -24,6 +24,8 @@ export interface VaultCalendarEvent {
   impliedDate?: true;
   /** Absent for note properties, which sit in no particular place in the text. */
   placement?: DirectivePlacement;
+  /** Which `gcal` entry in the note properties declared this event. Zero-based. */
+  entryIndex?: number;
 }
 
 /** A declaration's position in its note, used to attach a status marker in the editor. */
@@ -40,6 +42,8 @@ export interface ParseIssue {
   message: string;
   /** Set when one declaration is at fault, so the editor can mark it rather than the whole note. */
   placement?: DirectivePlacement;
+  /** Set when one note-properties entry is at fault, for the same reason. */
+  entryIndex?: number;
 }
 
 export interface ParseResult {
@@ -185,7 +189,12 @@ function parseFrontmatter(options: ParseFileOptions, result: ParseResult): void 
     const location = `frontmatter gcal${declared.length > 1 ? `[${index}]` : ""}`;
     const entry = readFrontmatterEntry(declaration);
     if ("error" in entry) {
-      result.issues.push({ sourcePath: options.path, location, message: entry.error });
+      result.issues.push({
+        sourcePath: options.path,
+        location,
+        message: entry.error,
+        entryIndex: index,
+      });
       return;
     }
 
@@ -195,6 +204,7 @@ function parseFrontmatter(options: ParseFileOptions, result: ParseResult): void 
       summary: entry.title ?? options.basename,
       sourceKey: makeSourceKey(options.path, `frontmatter-${index + 1}`),
       location,
+      entryIndex: index,
     });
   });
 }
@@ -335,6 +345,7 @@ function addEvent(
     sourceKey: string;
     location: string;
     placement?: DirectivePlacement;
+    entryIndex?: number;
     impliedDate?: true;
   },
 ): void {
@@ -351,6 +362,7 @@ function addEvent(
       recurrence,
       ...(schedule.impliedDate || input.impliedDate ? { impliedDate: true as const } : {}),
       ...(input.placement ? { placement: input.placement } : {}),
+      ...(input.entryIndex === undefined ? {} : { entryIndex: input.entryIndex }),
     });
   } catch (error) {
     result.issues.push({
@@ -358,6 +370,7 @@ function addEvent(
       location: input.location,
       message: error instanceof Error ? error.message : String(error),
       ...(input.placement ? { placement: input.placement } : {}),
+      ...(input.entryIndex === undefined ? {} : { entryIndex: input.entryIndex }),
     });
   }
 }
@@ -556,17 +569,15 @@ function cleanSummary(value: string): string {
  * This looks at a single line, so it cannot know the line sits in a fenced block. Callers pair each
  * result with a status looked up by placement, and a fenced line simply has none.
  */
-export function findLineDirectives(
-  line: string,
-): Array<{ from: number; to: number; occurrence: number }> {
-  const found: Array<{ from: number; to: number; occurrence: number }> = [];
+export function findLineDirectives(line: string): LineDirective[] {
+  const found: LineDirective[] = [];
   let occurrence = 0;
 
   for (const span of directiveSpans(line)) {
     const events = countDeclarations(line.slice(span.from, span.to));
     if (events === 0) continue;
     occurrence += events;
-    found.push({ from: span.from, to: span.to, occurrence: occurrence - events + 1 });
+    found.push({ ...span, occurrence: occurrence - events + 1 });
   }
   return found;
 }
@@ -595,11 +606,27 @@ function countDeclarations(spanText: string): number {
   return marked.match(EVENT_DIRECTIVE)?.length || marked.match(REPEAT_DIRECTIVES)?.length || 0;
 }
 
-/** The inline-code spans on a line that hold nothing but directives, delimiters included. */
-function directiveSpans(line: string): Array<{ from: number; to: number }> {
+export interface LineDirective {
+  /** The whole code span, delimiters included. */
+  from: number;
+  to: number;
+  /**
+   * Just the text between the delimiters. Obsidian hides the delimiters itself, and a replacement
+   * covering them too collides with Obsidian's own decoration and draws nothing at all.
+   */
+  innerFrom: number;
+  innerTo: number;
+  /** One-based index within the line of the first event this span declares. */
+  occurrence: number;
+}
+
+type DirectiveSpan = Omit<LineDirective, "occurrence">;
+
+/** The inline-code spans on a line that hold nothing but directives. */
+function directiveSpans(line: string): DirectiveSpan[] {
   const runs = backtickRuns(line);
   const closingFor = matchRuns(runs);
-  const spans: Array<{ from: number; to: number }> = [];
+  const spans: DirectiveSpan[] = [];
   let cursor = 0;
 
   for (let index = 0; index < runs.length; index += 1) {
@@ -609,7 +636,12 @@ function directiveSpans(line: string): Array<{ from: number; to: number }> {
     const closing = runs[closingIndex];
     if (!closing || opening.start < cursor) continue;
     if (DIRECTIVE_SPAN.test(line.slice(opening.end, closing.start))) {
-      spans.push({ from: opening.start, to: closing.end });
+      spans.push({
+        from: opening.start,
+        to: closing.end,
+        innerFrom: opening.end,
+        innerTo: closing.start,
+      });
     }
     cursor = closing.end;
     index = closingIndex;

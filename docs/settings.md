@@ -26,6 +26,12 @@ Open **Settings → Google Calendar Sync**.
 | **Change limit per sync** | Caps how many events one sync may create, update, and delete, default 200. A sync above it stops without changing anything and reports the count, which protects you from a note or script that makes events in bulk. |
 | **Sync now** | Runs a full sync straight away, the same as the **Sync now** command. The only way to approve changes waiting for review. |
 
+## In your notes
+
+| Setting | What it does |
+| --- | --- |
+| **Render declarations** | On by default. Draws each declaration as a chip with its date, time, and repeat in words, and the sync icon in front. Click a chip to get the text back. Off always shows the text. [What the chips say](event-syntax.md#how-a-declaration-is-shown). |
+
 The tab ends with two reference sections rather than settings: **Event syntax** sums up
 [Event syntax](event-syntax.md), and **Trust model** repeats who can change your calendar, covered in
 [Security and privacy](security-and-privacy.md#trust-model).

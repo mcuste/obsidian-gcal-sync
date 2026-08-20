@@ -1,4 +1,4 @@
-import { type Extension, RangeSetBuilder } from "@codemirror/state";
+import type { EditorSelection, Extension, Range, Text } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -8,37 +8,69 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { editorInfoField, type MarkdownPostProcessor, setIcon } from "obsidian";
-import { findLineDirectives, isDirectiveSpanText } from "./event-parser";
+import { editorInfoField, type MarkdownPostProcessor } from "obsidian";
+import { buildChip, buildStatusMarker, chipKey } from "./directive-chip";
+import { type DisplayOptions, describeEvent, type EventDisplay } from "./event-display";
+import {
+  findLineDirectives,
+  isDirectiveSpanText,
+  parseSchedule,
+  type VaultCalendarEvent,
+} from "./event-parser";
+import { findFrontmatterStarts } from "./frontmatter-scan";
 import type { DirectiveStatus } from "./main";
 
-const ICONS: Record<DirectiveStatus, string> = {
-  synced: "calendar-check",
-  pending: "calendar-clock",
-  blocked: "calendar-minus",
-  error: "calendar-x",
-};
-const LABELS: Record<DirectiveStatus, string> = {
-  synced: "On your Google Calendar",
-  pending: "Not synced yet",
-  blocked: "Held back until the other declaration in this note is fixed",
-  error: "Google Calendar Sync could not read this declaration",
-};
+/** No properties block runs this deep, so the search for its end stops here. */
+const MAX_FRONTMATTER_LINES = 300;
+const OPENING_FENCE = /^---\s*$/;
+const CLOSING_FENCE = /^(?:---|\.\.\.)\s*$/;
+
+export interface DirectiveView {
+  status: DirectiveStatus;
+  /** Absent when the declaration could not be read, so there is nothing to draw. */
+  event?: VaultCalendarEvent;
+}
 
 export interface DirectiveStatusSource {
-  /** The marker for the declaration at this position, or undefined if it is not one. */
-  directiveStatus(path: string, line: number, occurrence: number): DirectiveStatus | undefined;
-  /** Registers a callback for when any marker changes, and returns its remover. */
+  /** The declaration at this position, or undefined if there is not one. */
+  directiveAt(path: string, line: number, occurrence: number): DirectiveView | undefined;
+  /** The note-properties entry at this index, matching `VaultCalendarEvent.entryIndex`. */
+  frontmatterAt(path: string, entryIndex: number): DirectiveView | undefined;
+  displayOptions(): DisplayOptions;
+  /** False leaves every declaration as written, with only a status marker beside it. */
+  chipsEnabled(): boolean;
+  /** True when Obsidian leaves the note properties in the editor text, not in its widget. */
+  propertiesInEditor(): boolean;
+  /** Registers a callback for when any declaration changes, and returns its remover. */
   onStatusChange(listener: () => void): () => void;
 }
 
-function buildMarker(status: DirectiveStatus): HTMLElement {
-  const marker = createSpan({
-    cls: ["gcal-directive-status", `gcal-directive-status-${status}`],
-    attr: { "aria-label": LABELS[status] },
-  });
-  setIcon(marker, ICONS[status]);
-  return marker;
+class ChipWidget extends WidgetType {
+  constructor(
+    private readonly status: DirectiveStatus,
+    private readonly display: EventDisplay,
+  ) {
+    super();
+  }
+
+  override eq(other: ChipWidget): boolean {
+    return chipKey(other.status, other.display) === chipKey(this.status, this.display);
+  }
+
+  override toDOM(view: EditorView): HTMLElement {
+    const chip = buildChip(this.status, this.display);
+    // Moving the cursor here is what brings the text back; the click alone would not move it.
+    chip.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      view.dispatch({ selection: { anchor: view.posAtDOM(chip) } });
+      view.focus();
+    });
+    return chip;
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
 }
 
 class StatusWidget extends WidgetType {
@@ -51,13 +83,13 @@ class StatusWidget extends WidgetType {
   }
 
   override toDOM(): HTMLElement {
-    return buildMarker(this.status);
+    return buildStatusMarker(this.status);
   }
 }
 
 /**
- * Marks declarations while editing. The text is left alone rather than replaced by a pill, so the
- * cursor and selection still behave normally inside a declaration you are typing.
+ * Draws declarations while editing. One the cursor or selection touches is left as written, so
+ * typing inside it behaves normally; every other one becomes a chip.
  */
 export function directiveStatusExtension(source: DirectiveStatusSource): Extension {
   return ViewPlugin.fromClass(
@@ -85,34 +117,161 @@ export function directiveStatusExtension(source: DirectiveStatusSource): Extensi
 
 function decorate(view: EditorView, source: DirectiveStatusSource): DecorationSet {
   const path = view.state.field(editorInfoField, false)?.file?.path;
-  const builder = new RangeSetBuilder<Decoration>();
-  if (!path) return builder.finish();
+  if (!path) return Decoration.none;
+
+  const ranges: Range<Decoration>[] = [];
+  const context: RenderContext = {
+    chips: source.chipsEnabled(),
+    options: source.displayOptions(),
+    selection: view.state.selection,
+  };
 
   for (const { from, to } of view.visibleRanges) {
     let position = from;
     while (position <= to) {
       const line = view.state.doc.lineAt(position);
       for (const found of findLineDirectives(line.text)) {
-        const status = source.directiveStatus(path, line.number - 1, found.occurrence);
-        if (!status) continue;
-        builder.add(
-          line.from + found.from,
-          line.from + found.to,
-          Decoration.mark({ class: `gcal-directive gcal-directive-${status}` }),
-        );
-        builder.add(
-          line.from + found.to,
-          line.from + found.to,
-          Decoration.widget({ widget: new StatusWidget(status), side: 1 }),
-        );
+        const declaration = source.directiveAt(path, line.number - 1, found.occurrence);
+        if (!declaration) continue;
+        addDeclaration(ranges, context, declaration, {
+          from: line.from + found.from,
+          to: line.from + found.to,
+          innerFrom: line.from + found.innerFrom,
+          innerTo: line.from + found.innerTo,
+        });
       }
       position = line.to + 1;
     }
   }
-  return builder.finish();
+
+  if (context.chips && source.propertiesInEditor()) {
+    addFrontmatter(ranges, context, view.state.doc, path, source);
+  }
+  // Sorted here, since the properties come before the lines walked above.
+  return Decoration.set(ranges, true);
 }
 
-/** Marks declarations in Reading view, where there is no cursor to work around. */
+interface RenderContext {
+  chips: boolean;
+  options: DisplayOptions;
+  selection: EditorSelection;
+}
+
+/** Where a declaration sits, with and without whatever delimits it. */
+interface DeclarationRange {
+  from: number;
+  to: number;
+  innerFrom: number;
+  innerTo: number;
+}
+
+function addDeclaration(
+  ranges: Range<Decoration>[],
+  context: RenderContext,
+  declaration: DirectiveView,
+  at: DeclarationRange,
+): void {
+  const display = chipFor(context, declaration, at);
+  if (display) {
+    ranges.push(
+      Decoration.replace({ widget: new ChipWidget(declaration.status, display) }).range(
+        at.innerFrom,
+        at.innerTo,
+      ),
+    );
+    return;
+  }
+  ranges.push(
+    Decoration.mark({ class: `gcal-directive gcal-directive-${declaration.status}` }).range(
+      at.from,
+      at.to,
+    ),
+  );
+  ranges.push(
+    Decoration.widget({ widget: new StatusWidget(declaration.status), side: 1 }).range(at.to),
+  );
+}
+
+/**
+ * The chip to draw, or undefined to leave the text as written. Delimiters count as touched too, so
+ * reaching either edge brings the text back.
+ */
+function chipFor(
+  context: RenderContext,
+  declaration: DirectiveView,
+  at: DeclarationRange,
+): EventDisplay | undefined {
+  if (!context.chips || !declaration.event) return undefined;
+  if (at.innerFrom >= at.innerTo) return undefined;
+  if (touches(context.selection, at.from, at.to)) return undefined;
+  return describeEvent(declaration.event, context.options);
+}
+
+function touches(selection: EditorSelection, from: number, to: number): boolean {
+  return selection.ranges.some((range) => range.from <= to && range.to >= from);
+}
+
+/**
+ * Draws the starts written in the note properties text. Only the start is replaced, so a title or
+ * repeat on its own line stays editable, and an entry with no event keeps showing what you wrote.
+ */
+function addFrontmatter(
+  ranges: Range<Decoration>[],
+  context: RenderContext,
+  doc: Text,
+  path: string,
+  source: DirectiveStatusSource,
+): void {
+  const properties = frontmatterText(doc);
+  if (!properties) return;
+
+  for (const start of findFrontmatterStarts(properties)) {
+    const line = doc.line(start.line + 1);
+    const from = line.from + start.from;
+    const to = line.from + start.to;
+    const declaration = source.frontmatterAt(path, start.entryIndex);
+    if (!declaration?.event) continue;
+    if (!writesTheSameEvent(declaration.event, start.text, context.options)) continue;
+    // A property value has no delimiters to leave behind, so the whole of it is the chip.
+    addDeclaration(ranges, context, declaration, { from, to, innerFrom: from, innerTo: to });
+  }
+}
+
+function frontmatterText(doc: Text): string {
+  if (doc.lines < 2 || !OPENING_FENCE.test(doc.line(1).text)) return "";
+  const last = Math.min(doc.lines, MAX_FRONTMATTER_LINES);
+  for (let line = 2; line <= last; line += 1) {
+    if (CLOSING_FENCE.test(doc.line(line).text)) return doc.sliceString(0, doc.line(line).to);
+  }
+  return "";
+}
+
+/**
+ * Whether this value really is the one that produced this event. The properties scan is shallow, so
+ * this is what stops odd YAML being drawn as a neighbouring entry's event.
+ */
+function writesTheSameEvent(
+  event: VaultCalendarEvent,
+  text: string,
+  options: DisplayOptions,
+): boolean {
+  try {
+    const schedule = parseSchedule(text, options.timeZone, options.now);
+    return (
+      schedule.start.date === event.start.date &&
+      schedule.start.dateTime === event.start.dateTime &&
+      schedule.end.date === event.end.date &&
+      schedule.end.dateTime === event.end.dateTime
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Draws declarations in Reading view. With no cursor to bring the text back, the chip and the text
+ * sit side by side and clicking swaps which one is shown.
+ */
 export function directiveStatusPostProcessor(source: DirectiveStatusSource): MarkdownPostProcessor {
   return (element, context) => {
     const spans = Array.from(element.querySelectorAll("code")).filter((code) =>
@@ -134,17 +293,49 @@ export function directiveStatusPostProcessor(source: DirectiveStatusSource): Mar
     // disagree if the section was re-rendered from stale text. Skip rather than mislabel.
     if (placements.length !== spans.length) return;
 
+    const chips = source.chipsEnabled();
+    const options = source.displayOptions();
+
     spans.forEach((span, index) => {
       const placement = placements[index];
       if (!placement) return;
-      const status = source.directiveStatus(
+      const declaration = source.directiveAt(
         context.sourcePath,
         placement.line,
         placement.occurrence,
       );
-      if (!status) return;
-      span.addClass("gcal-directive", `gcal-directive-${status}`);
-      span.insertAdjacentElement("afterend", buildMarker(status));
+      if (!declaration) return;
+
+      const display =
+        chips && declaration.event ? describeEvent(declaration.event, options) : undefined;
+      if (!display) {
+        span.addClass("gcal-directive", `gcal-directive-${declaration.status}`);
+        span.insertAdjacentElement("afterend", buildStatusMarker(declaration.status));
+        return;
+      }
+      renderReadingChip(span, declaration.status, display);
     });
   };
+}
+
+function renderReadingChip(
+  span: HTMLElement,
+  status: DirectiveStatus,
+  display: EventDisplay,
+): void {
+  const holder = createSpan({ cls: "gcal-declaration" });
+  span.replaceWith(holder);
+
+  const chip = buildChip(status, display, { focusable: true });
+  span.addClass("gcal-declaration-source");
+  holder.append(chip, span);
+
+  const toggle = (): void => holder.toggleClass("is-open", !holder.hasClass("is-open"));
+  chip.addEventListener("click", toggle);
+  chip.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    toggle();
+  });
+  span.addEventListener("click", toggle);
 }

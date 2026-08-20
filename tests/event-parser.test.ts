@@ -421,28 +421,29 @@ test("a directive outside backticks never declares an event", () => {
 
 test("reports where each declaration sits so the editor can mark it", () => {
   assert.deepEqual(findLineDirectives("Design review `gcal:2026-08-18T14:00` today"), [
-    { from: 14, to: 37, occurrence: 1 },
+    { from: 14, to: 37, innerFrom: 15, innerTo: 36, occurrence: 1 },
   ]);
   assert.deepEqual(
     findLineDirectives("A `gcal:09:00` then B `gcal:10:00`").map((found) => found.occurrence),
     [1, 2],
   );
   assert.deepEqual(findLineDirectives("Standup `gcal:09:00 gcal-repeat:weekly`"), [
-    { from: 8, to: 39, occurrence: 1 },
+    { from: 8, to: 39, innerFrom: 9, innerTo: 38, occurrence: 1 },
   ]);
   assert.deepEqual(findLineDirectives("Write `Standup gcal:not-a-date` here"), []);
   assert.deepEqual(findLineDirectives("A plain gcal:2026-08-18 mention"), []);
   assert.deepEqual(findLineDirectives("Repeat only `gcal-repeat:weekly`"), [
-    { from: 12, to: 32, occurrence: 1 },
+    { from: 12, to: 32, innerFrom: 13, innerTo: 31, occurrence: 1 },
   ]);
 });
 
-test("declaration ranges cover the backticks so a marker can sit after them", () => {
-  const line = "Design review `gcal:2026-08-18T14:00` today";
+test("declaration ranges cover the backticks, and the inner range leaves them out", () => {
+  const line = "Design review ``gcal:2026-08-18T14:00`` today";
   const [found] = findLineDirectives(line);
 
   assert.ok(found);
-  assert.equal(line.slice(found.from, found.to), "`gcal:2026-08-18T14:00`");
+  assert.equal(line.slice(found.from, found.to), "``gcal:2026-08-18T14:00``");
+  assert.equal(line.slice(found.innerFrom, found.innerTo), "gcal:2026-08-18T14:00");
 });
 
 test("Reading view marks every declaration, including a repeat on its own", () => {
