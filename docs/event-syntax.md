@@ -41,6 +41,14 @@ Standup `gcal:09:00 gcal-repeat:weekdays`
 Standup `gcal:09:00` `gcal-repeat:weekdays`
 ```
 
+`gcal-repeat` can also stand alone. It creates an all-day event beginning today; after its first
+sync, that start date stays fixed rather than moving forward each day:
+
+```markdown
+- [ ] Take medication `gcal-repeat:daily`
+- [ ] Water plants `gcal-repeat:everyday`
+```
+
 ### Where the title comes from
 
 The text since the start of the line, or since the previous declaration on that line. Leading
@@ -206,6 +214,7 @@ properties. A rule written once on a line applies to every declaration on that l
 | Rule | Result |
 | --- | --- |
 | `daily` | Every day. |
+| `everyday` | Every day. |
 | `weekly` | Every week on the start day. |
 | `fortnightly` | Every 2 weeks. |
 | `monthly` | Every month. |

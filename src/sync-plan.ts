@@ -130,14 +130,33 @@ const WALL_CLOCK = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}$/;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
- * Pins a start with no date to the date the event already has on Google. The time of day and the
- * duration still come from the note, so editing the time retimes the event on its original day.
+ * Pins a start resolved from today to the date the event already has on Google. The time of day
+ * and duration still come from the note, so editing a bare-time event retimes it on its original
+ * day. The same applies to a standalone recurrence, whose all-day start is initially today.
  */
 function anchorImpliedDate(desired: VaultCalendarEvent, remote: GoogleEvent): VaultCalendarEvent {
   if (!desired.impliedDate) return desired;
   const desiredDate = WALL_CLOCK.exec(desired.start.dateTime ?? "")?.[1];
   const remoteDate = WALL_CLOCK.exec(remote.start?.dateTime ?? "")?.[1];
-  if (!desiredDate || !remoteDate || desiredDate === remoteDate) return desired;
+  if (desiredDate && remoteDate) {
+    return anchorByDay(desired, desiredDate, remoteDate, shiftWallClock);
+  }
+
+  const desiredAllDay = desired.start.date;
+  const remoteAllDay = remote.start?.date;
+  if (desiredAllDay && remoteAllDay) {
+    return anchorByDay(desired, desiredAllDay, remoteAllDay, shiftCalendarDate);
+  }
+  return desired;
+}
+
+function anchorByDay(
+  desired: VaultCalendarEvent,
+  desiredDate: string,
+  remoteDate: string,
+  shift: (value: CalendarDateTime, days: number) => CalendarDateTime,
+): VaultCalendarEvent {
+  if (desiredDate === remoteDate) return desired;
 
   const shiftDays =
     (Date.parse(`${remoteDate}T00:00:00Z`) - Date.parse(`${desiredDate}T00:00:00Z`)) / MS_PER_DAY;
@@ -145,8 +164,8 @@ function anchorImpliedDate(desired: VaultCalendarEvent, remote: GoogleEvent): Va
 
   return {
     ...desired,
-    start: shiftWallClock(desired.start, shiftDays),
-    end: shiftWallClock(desired.end, shiftDays),
+    start: shift(desired.start, shiftDays),
+    end: shift(desired.end, shiftDays),
   };
 }
 
@@ -154,6 +173,12 @@ function shiftWallClock(value: CalendarDateTime, days: number): CalendarDateTime
   if (!value.dateTime) return value;
   const shifted = new Date(Date.parse(`${value.dateTime}Z`) + days * MS_PER_DAY);
   return { ...value, dateTime: shifted.toISOString().slice(0, 19) };
+}
+
+function shiftCalendarDate(value: CalendarDateTime, days: number): CalendarDateTime {
+  if (!value.date) return value;
+  const shifted = new Date(Date.parse(`${value.date}T00:00:00Z`) + days * MS_PER_DAY);
+  return { ...value, date: shifted.toISOString().slice(0, 10) };
 }
 
 function eventsEqual(remote: GoogleEvent, desired: VaultCalendarEvent): boolean {

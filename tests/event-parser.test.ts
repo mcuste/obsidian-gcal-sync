@@ -89,6 +89,7 @@ test("normalizes recurrence aliases and RRULE values", () => {
 
 test("normalizes calendar-period names, including quarterly", () => {
   assert.equal(normalizeRecurrence("daily"), "RRULE:FREQ=DAILY");
+  assert.equal(normalizeRecurrence("everyday"), "RRULE:FREQ=DAILY");
   assert.equal(normalizeRecurrence("monthly"), "RRULE:FREQ=MONTHLY");
   assert.equal(normalizeRecurrence("quarterly"), "RRULE:FREQ=MONTHLY;INTERVAL=3");
   assert.equal(normalizeRecurrence("yearly"), "RRULE:FREQ=YEARLY");
@@ -331,6 +332,31 @@ test("inline code holding only directives declares events", () => {
   );
 });
 
+test("a standalone repeat creates an all-day event beginning today", () => {
+  const result = parseVaultEvents({
+    path: "Tasks.md",
+    basename: "Tasks",
+    content: "- [ ] Take medication `gcal-repeat:everyday`",
+    timeZone: "America/New_York",
+    vaultId: VAULT_ID,
+    now: new Date("2026-08-18T23:30:00Z"),
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(result.events, [
+    {
+      sourceKey: "Tasks.md::line-1-1",
+      remoteSourceKey: makeRemoteSourceKey(VAULT_ID, "Tasks.md::line-1-1"),
+      summary: "Take medication",
+      start: { date: "2026-08-18" },
+      end: { date: "2026-08-19" },
+      recurrence: ["RRULE:FREQ=DAILY"],
+      impliedDate: true,
+      placement: { line: 0, occurrence: 1 },
+    },
+  ]);
+});
+
 test("inline code mixing prose with a directive stays inert", () => {
   const result = parseVaultEvents({
     path: "Notes.md",
@@ -402,7 +428,9 @@ test("reports where each declaration sits so the editor can mark it", () => {
   ]);
   assert.deepEqual(findLineDirectives("Write `Standup gcal:not-a-date` here"), []);
   assert.deepEqual(findLineDirectives("A plain gcal:2026-08-18 mention"), []);
-  assert.deepEqual(findLineDirectives("Repeat only `gcal-repeat:weekly`"), []);
+  assert.deepEqual(findLineDirectives("Repeat only `gcal-repeat:weekly`"), [
+    { from: 12, to: 32, occurrence: 1 },
+  ]);
 });
 
 test("declaration ranges cover the backticks so a marker can sit after them", () => {

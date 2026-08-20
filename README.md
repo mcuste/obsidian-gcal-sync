@@ -69,6 +69,7 @@ event title.
 | ``Offsite `gcal:2026-09-14/P3D` `` | A three day all-day event |
 | ``Coffee with Sam `gcal:16:00/PT30M` `` | Half an hour at 16:00 today |
 | ``Standup `gcal:09:15/PT15M gcal-repeat:weekdays` `` | 15 minutes every weekday at 09:15 |
+| ``Take medication `gcal-repeat:daily` `` | An all-day event repeating every day, beginning today |
 
 A date on its own is an all-day event, a timestamp is a timed one, and a time on its own means
 today. Times are read in your time zone unless you add `Z` or a UTC offset. Events can also be

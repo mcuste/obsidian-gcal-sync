@@ -230,6 +230,32 @@ test("an implied date stays on the day the event was created", () => {
   assert.deepEqual(plan.deletes, []);
 });
 
+test("an all-day standalone recurrence stays on the day it was created", () => {
+  const recurrence: VaultCalendarEvent = {
+    ...desired("medication", "Take medication"),
+    start: { date: "2026-08-20" },
+    end: { date: "2026-08-21" },
+    recurrence: ["RRULE:FREQ=DAILY"],
+    impliedDate: true,
+  };
+  const plan = planReconciliation(
+    [recurrence],
+    [
+      {
+        id: "medication-id",
+        summary: "Take medication",
+        start: { date: "2026-08-18" },
+        end: { date: "2026-08-19" },
+        recurrence: ["RRULE:FREQ=DAILY"],
+        extendedProperties: { private: { obsidianSourceKey: remoteKey("medication") } },
+      },
+    ],
+  );
+
+  assert.deepEqual(plan.updates, []);
+  assert.deepEqual(plan.unchanged, ["medication"]);
+});
+
 test("retiming an implied-date event keeps its original day", () => {
   const retimed = {
     ...impliedToday("standup", "2026-08-20", "10:00"),

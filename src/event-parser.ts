@@ -63,6 +63,7 @@ interface ParseFileOptions {
 const MARK = "\uE000";
 const EVENT_DIRECTIVE = /\uE000gcal:([^\s\uE000]+)/g;
 const REPEAT_DIRECTIVE = /\uE000gcal-repeat:([^\s\uE000]+)/i;
+const REPEAT_DIRECTIVES = /\uE000gcal-repeat:([^\s\uE000]+)/gi;
 /** Any `gcal-…` token, so an unrecognized one is reported instead of quietly doing nothing. */
 const SUFFIXED_DIRECTIVE = /\uE000gcal-([a-z]+):/gi;
 const KNOWN_SUFFIXES = ["repeat"];
@@ -111,6 +112,7 @@ const UNIT_FREQUENCIES: Record<string, string> = {
 };
 const NAMED_INTERVALS: Record<string, string> = {
   daily: "FREQ=DAILY",
+  everyday: "FREQ=DAILY",
   weekly: "FREQ=WEEKLY",
   fortnightly: "FREQ=WEEKLY;INTERVAL=2",
   monthly: "FREQ=MONTHLY",
@@ -294,6 +296,29 @@ function parseLines(options: ParseFileOptions, result: ParseResult): void {
         placement: { line: lineIndex, occurrence },
       });
     });
+
+    // A recurrence can stand on its own to make an all-day event beginning today. A repeat on a
+    // line with `gcal:` still belongs to that event, preserving the existing shared-line syntax.
+    if (matches.length === 0) {
+      const repeats = Array.from(line.matchAll(REPEAT_DIRECTIVES));
+      repeats.forEach((match, index) => {
+        const repeat = match[1];
+        if (!repeat) return;
+
+        const start = match.index ?? 0;
+        const previousStart = index === 0 ? 0 : (repeats[index - 1]?.index ?? 0);
+        const occurrence = index + 1;
+        addEvent(result, options, {
+          raw: currentDate(options.timeZone, options.now ?? new Date()),
+          repeat,
+          summary: cleanSummary(line.slice(previousStart, start)) || options.basename,
+          sourceKey: makeSourceKey(options.path, `line-${lineIndex + 1}-${occurrence}`),
+          location: `line ${lineIndex + 1}`,
+          placement: { line: lineIndex, occurrence },
+          impliedDate: true,
+        });
+      });
+    }
   });
 }
 
@@ -307,6 +332,7 @@ function addEvent(
     sourceKey: string;
     location: string;
     placement?: DirectivePlacement;
+    impliedDate?: true;
   },
 ): void {
   try {
@@ -319,7 +345,7 @@ function addEvent(
       start: schedule.start,
       end: schedule.end,
       recurrence,
-      ...(schedule.impliedDate ? { impliedDate: true as const } : {}),
+      ...(schedule.impliedDate || input.impliedDate ? { impliedDate: true as const } : {}),
       ...(input.placement ? { placement: input.placement } : {}),
     });
   } catch (error) {
@@ -536,7 +562,8 @@ export function findLineDirectives(
     // A directive span holds no backticks of its own, so blanking them leaves the delimiters
     // as the whitespace that markDirectives turns into the sentinel.
     const marked = markDirectives(line.slice(span.from, span.to).replaceAll("`", " "));
-    const events = marked.match(EVENT_DIRECTIVE)?.length ?? 0;
+    const events =
+      marked.match(EVENT_DIRECTIVE)?.length || marked.match(REPEAT_DIRECTIVES)?.length || 0;
     if (events === 0) continue;
     occurrence += events;
     found.push({ from: span.from, to: span.to, occurrence: occurrence - events + 1 });

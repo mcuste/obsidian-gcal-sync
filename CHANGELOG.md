@@ -6,6 +6,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- Standalone inline recurrence declarations, such as `` `gcal-repeat:daily` ``, create an all-day
+  event beginning today. `everyday` is accepted as an alias for `daily`.
+
 ## [0.2.0] - 2026-08-20
 
 ### Changed
