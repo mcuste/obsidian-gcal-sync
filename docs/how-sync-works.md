@@ -23,7 +23,8 @@ Only one sync runs at a time. The rest wait in line.
 ## What the plugin can touch
 
 Every event the plugin creates carries three hidden markers: a flag, this vault's ID, and a hashed key
-for the declaration it came from. Each sync asks Google only for events carrying this vault's ID, then
+for the declaration it came from. The vault ID is a hash of the vault name, so every device holding
+the vault stamps the same one. Each sync asks Google only for events carrying this vault's ID, then
 checks the markers again before planning anything. Events you made in Google Calendar carry none of
 these, so the plugin cannot see them, and neither can it see events from another vault on the same
 calendar.
@@ -45,9 +46,22 @@ replies and reminders survive.
 | Change only the title or time | event patched, the key never moved |
 | Move a declaration **and** change it in one edit | recreated, nothing left to match on |
 | Two identical events, one moves | recreated, the match is ambiguous |
+| Open the vault on another device | its events are found, not duplicated |
 
-The last two are the real limits, and both are rare, because a sync runs about a second after you stop
-typing, so an edit and a move seldom land in the same sync.
+The two recreate cases are the real limits, and both are rare, because a sync runs about a second
+after you stop typing, so an edit and a move seldom land in the same sync.
+
+## Two devices syncing at once
+
+Every declaration also reserves the Google event ID it will be created under, derived from the same
+hash. Two devices creating the same event at the same time therefore ask for that one ID: Google
+keeps the first and refuses the second as a duplicate, so the second writes the existing event
+instead of adding a copy.
+
+Copies left over from before, made by two devices that stamped different vault IDs, are cleaned up by
+the next full sync, as long as both copies carry the vault ID in use now. The copy Google created
+first is the one kept, so every device keeps the same one, and removing the extras never waits for
+approval the way a deletion does: one copy always survives.
 
 ## What counts as a change
 
@@ -64,7 +78,8 @@ stops for review when it looks unintended.
 
 - **Approval.** A sync that deletes 5 or more events, or changes 25 or more, needs your approval. An
   interactive sync opens a dialog with the counts. A background sync cannot ask, so it changes nothing
-  and shows a notice once, telling you to run **Sync now** to review it.
+  and shows a notice once, telling you to run **Sync now** to review it. Extra copies of an event that
+  is being kept are not counted, since one copy always survives.
 - **Change limit.** A sync larger than the limit, 200 events by default, is refused outright, with a
   notice giving the count. Nothing is applied and there is no dialog. Fix the notes, or raise the
   limit in settings if the change is expected.

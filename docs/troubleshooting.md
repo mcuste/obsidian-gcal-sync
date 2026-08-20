@@ -56,6 +56,17 @@ Check these in order:
 
 ## Duplicate or recreated events
 
+**Every event exists twice.** Two devices synced the same vault under different vault IDs, which
+happened when one of them stored a random ID from an earlier release. Every device now takes the ID
+from the vault name, so new duplicates cannot appear, and each declaration also reserves one Google
+event ID, which stops two devices creating the same event at once. Copies stamped with the old
+random ID are invisible to the plugin: delete them in Google Calendar. Copies that both carry the
+current ID are removed by the next sync, keeping the one Google created first; if that passes the
+change limit, the notice says by how much, so raise **Change limit per sync** and sync again.
+
+The name of the vault folder is what the ID comes from, so give the folder the same name on every
+device.
+
 **An event was recreated instead of moved.** Moving a line, reordering declarations, and renaming a
 note are all safe on their own. The two cases that recreate an event are a declaration that moves
 **and** changes in the same sync, and two identical events, where the match is ambiguous. See

@@ -237,7 +237,7 @@ export default class GcalSyncPlugin extends Plugin {
 
   private async loadSettings(): Promise<void> {
     const stored = (await this.loadData()) as Partial<GcalSyncSettings> | null;
-    const vaultId = stored?.vaultId || deriveVaultId(this.app.vault.getName());
+    const vaultId = deriveVaultId(this.app.vault.getName());
     const defaults = defaultSettings(vaultId);
     const settings = Object.assign(defaults, stored ?? {}, { vaultId });
     settings.syncFolders = Array.isArray(settings.syncFolders)
@@ -472,7 +472,9 @@ function formatStats(stats: SyncStats): string {
     stats.deferredDeletes > 0
       ? `, ${stats.deferredDeletes} deletion(s) held back until every note parses`
       : "";
-  return `Google Calendar synced: ${stats.created} created, ${stats.updated} updated, ${stats.deleted} deleted, ${stats.unchanged} unchanged${deferred}`;
+  const duplicates =
+    stats.duplicatesRemoved > 0 ? `, including ${stats.duplicatesRemoved} duplicate(s)` : "";
+  return `Google Calendar synced: ${stats.created} created, ${stats.updated} updated, ${stats.deleted} deleted${duplicates}, ${stats.unchanged} unchanged${deferred}`;
 }
 
 function errorMessage(error: unknown): string {

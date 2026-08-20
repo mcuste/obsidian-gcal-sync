@@ -12,11 +12,12 @@ import type {
 } from "../src/gcal";
 import { DEFAULT_MAX_CHANGES_PER_SYNC } from "../src/gcal";
 import GcalSyncPlugin, { type PluginTimers } from "../src/main";
-import type { GcalSyncSettings } from "../src/settings";
+import { deriveVaultId, type GcalSyncSettings } from "../src/settings";
 import { type GoogleEvent, planReconciliation } from "../src/sync-plan";
 
 const RuntimeTFile = TFile as unknown as new (path: string) => TFile;
-const VAULT_ID = "vault-id";
+/** The plugin takes its vault ID from the vault name, so the tests take the same one. */
+const VAULT_ID = deriveVaultId("Notes");
 
 /** The key the plugin stores on Google for a note-local source key. */
 function remoteKey(sourceKey: string): string {
@@ -180,6 +181,7 @@ class InMemoryGateway implements GcalGateway {
       created: plan.creates.length,
       updated: plan.updates.length,
       deleted: plan.deletes.length,
+      duplicatesRemoved: plan.duplicates.length,
       unchanged: plan.unchanged.length,
       deferredDeletes,
       syncedSourceKeys: [
@@ -254,6 +256,7 @@ class BlockingGateway implements GcalGateway {
       created: 0,
       updated: 0,
       deleted: 0,
+      duplicatesRemoved: 0,
       unchanged: 0,
       deferredDeletes: 0,
       syncedSourceKeys: [],
@@ -639,4 +642,17 @@ test("a vault opened without stored plugin data stamps the ID it used before", a
   assert.equal(first.vaultIds.length, 1);
   assert.deepEqual(second.vaultIds, first.vaultIds);
   second.plugin.onunload();
+});
+
+test("a vault ID stored by an earlier release is replaced by the one the name gives", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault, vaultIds } = setup(gateway, { vaultId: "random-id-from-0.3.0" });
+  vault.set("Notes.md", "Standup `gcal:2026-08-18`");
+
+  await plugin.onload();
+  await plugin.syncNow(false);
+
+  assert.deepEqual(vaultIds, [VAULT_ID]);
+  assert.deepEqual(sourceKeys(gateway), [["Notes.md::line-1-1", "Standup", "created-1"]]);
+  plugin.onunload();
 });

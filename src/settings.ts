@@ -52,9 +52,9 @@ export function defaultSettings(vaultId: string): GcalSyncSettings {
 }
 
 /**
- * ID this vault stamps on its events. Taken from the vault name so a vault opened without the
- * plugin's data.json keeps the same ID and finds its events instead of duplicating them. The name
- * is hashed, so it never reaches Google.
+ * ID this vault stamps on its events. Always the vault name, so every device holding the vault
+ * stamps the same one and finds its events instead of duplicating them. Hashed, so the name never
+ * reaches Google.
  */
 export function deriveVaultId(vaultName: string): string {
   return createHash("sha256").update(vaultName).digest("base64url").slice(0, 22);

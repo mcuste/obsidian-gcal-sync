@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   findLineDirectives,
   MAX_EVENTS_PER_NOTE,
+  makeRemoteEventId,
   makeRemoteSourceKey,
   normalizeRecurrence,
   parseSchedule,
@@ -26,6 +27,7 @@ test("parses inline event title, duration, and recurrence", () => {
     {
       sourceKey: "Projects/Launch.md::line-1-1",
       remoteSourceKey: makeRemoteSourceKey(VAULT_ID, "Projects/Launch.md::line-1-1"),
+      remoteEventId: makeRemoteEventId(VAULT_ID, "Projects/Launch.md::line-1-1"),
       summary: "Team standup",
       start: {
         dateTime: "2026-08-18T09:00:00-04:00",
@@ -347,6 +349,7 @@ test("a standalone repeat creates an all-day event beginning today", () => {
     {
       sourceKey: "Tasks.md::line-1-1",
       remoteSourceKey: makeRemoteSourceKey(VAULT_ID, "Tasks.md::line-1-1"),
+      remoteEventId: makeRemoteEventId(VAULT_ID, "Tasks.md::line-1-1"),
       summary: "Take medication",
       start: { date: "2026-08-18" },
       end: { date: "2026-08-19" },
@@ -614,4 +617,21 @@ test("an unrecognized directive is reported rather than silently ignored", () =>
     "Unknown directive gcal-id; use gcal or gcal-repeat",
   ]);
   assert.deepEqual(messages("Standup `gcal:09:00 gcal-repeat:weekly`"), []);
+});
+
+test("a declaration reserves one Google event ID", () => {
+  const parsed = parseVaultEvents({
+    path: "Notes.md",
+    basename: "Notes",
+    content: "Standup `gcal:2026-08-18`",
+    timeZone: "UTC",
+    vaultId: VAULT_ID,
+  });
+
+  const event = parsed.events[0];
+  assert.ok(event);
+  assert.equal(event.remoteEventId, makeRemoteEventId(VAULT_ID, "Notes.md::line-1-1"));
+  // Google only accepts event IDs written in base32hex.
+  assert.match(event.remoteEventId, /^[0-9a-v]{5,1024}$/);
+  assert.notEqual(makeRemoteEventId("other-vault", "Notes.md::line-1-1"), event.remoteEventId);
 });

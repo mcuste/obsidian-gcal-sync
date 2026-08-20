@@ -37,6 +37,7 @@ function desired(sourceKey: string, summary: string, recurrence?: string[]): Vau
   return {
     sourceKey,
     remoteSourceKey: sourceKey,
+    remoteEventId: `${sourceKey}-reserved-id`,
     summary,
     start: { date: "2026-08-18" },
     end: { date: "2026-08-19" },
@@ -109,6 +110,7 @@ test("managed-event listing isolates the vault, exhausts pages, and encodes IDs"
     created: 0,
     updated: 0,
     deleted: 2,
+    duplicatesRemoved: 0,
     unchanged: 0,
     deferredDeletes: 0,
     syncedSourceKeys: [],
@@ -175,6 +177,7 @@ test("create and patch bodies preserve source metadata and remove recurrence", a
     created: 1,
     updated: 1,
     deleted: 0,
+    duplicatesRemoved: 0,
     unchanged: 0,
     deferredDeletes: 0,
     syncedSourceKeys: ["new", "changed"],
@@ -190,6 +193,7 @@ test("create and patch bodies preserve source metadata and remove recurrence", a
     "https://www.googleapis.com/calendar/v3/calendars/calendar-id/events/patch%2Fid",
   );
   assert.deepEqual(requestBody(createRequest), {
+    id: "new-reserved-id",
     summary: "New",
     start: { date: "2026-08-18" },
     end: { date: "2026-08-19" },
@@ -350,6 +354,7 @@ test("events marked for another vault are never planned against", async () => {
     created: 0,
     updated: 0,
     deleted: 0,
+    duplicatesRemoved: 0,
     unchanged: 0,
     deferredDeletes: 0,
     syncedSourceKeys: [],
@@ -474,6 +479,7 @@ test("deletes are held back while part of the vault is unreadable", async () => 
     created: 0,
     updated: 0,
     deleted: 0,
+    duplicatesRemoved: 0,
     unchanged: 0,
     deferredDeletes: 2,
     syncedSourceKeys: [],
@@ -500,4 +506,145 @@ test("revoking sends the refresh token to Google and surfaces failures", async (
     revokeGoogleAuthorization("refresh-token", failing.transport),
     /revocation failed \(400\): invalid_token/,
   );
+});
+
+test("a create Google rejects as a duplicate patches that event instead of adding a copy", async () => {
+  const { requests, transport } = recordingTransport((request) => {
+    if (request.url === TOKEN_ENDPOINT) return response({ access_token: "access-token" });
+    if (request.method === "GET") return response({ items: [] });
+    if (request.method === "POST") {
+      return response(
+        { error: { message: "duplicate" } },
+        409,
+        '{"error":{"message":"duplicate"}}',
+      );
+    }
+    if (request.method === "PATCH") return response({});
+    throw new Error(`Unexpected request: ${request.method} ${request.url}`);
+  });
+
+  const stats = await client(transport).reconcile([desired("new", "New")]);
+
+  assert.equal(stats.created, 1);
+  const patchRequest = requests.find((request) => request.method === "PATCH");
+  assert.ok(patchRequest);
+  assert.equal(
+    patchRequest.url,
+    "https://www.googleapis.com/calendar/v3/calendars/calendar-id/events/new-reserved-id",
+  );
+  assert.deepEqual(requestBody(patchRequest), {
+    status: "confirmed",
+    summary: "New",
+    start: { date: "2026-08-18" },
+    end: { date: "2026-08-19" },
+    recurrence: [],
+    extendedProperties: {
+      private: {
+        obsidianGcal: "1",
+        obsidianVaultId: "vault/id",
+        obsidianSourceKey: "new",
+      },
+    },
+  });
+  assert.equal(
+    requests.filter((request) => request.method === "POST" && request.url.includes("/calendar/v3/"))
+      .length,
+    1,
+  );
+});
+
+test("duplicate copies are removed without approval, even while deletes are held back", async () => {
+  const copies = ["copy-1", "copy-2", "copy-3", "copy-4", "copy-5", "copy-6"];
+  const { requests, transport } = recordingTransport((request) => {
+    if (request.url === TOKEN_ENDPOINT) return response({ access_token: "access-token" });
+    if (request.method === "GET") {
+      return response({
+        items: [
+          ...copies.map((id) => ({
+            id,
+            summary: "Same",
+            start: { date: "2026-08-18" },
+            end: { date: "2026-08-19" },
+            extendedProperties: { private: managedBy("same") },
+          })),
+          {
+            id: "stale-id",
+            summary: "Stale",
+            extendedProperties: { private: managedBy("stale") },
+          },
+        ],
+      });
+    }
+    if (request.method === "DELETE") return response({}, 204, "");
+    throw new Error(`Unexpected request: ${request.method} ${request.url}`);
+  });
+
+  let approvals = 0;
+  const stats = await client(transport).reconcile([desired("same", "Same")], {
+    allowDeletes: false,
+    approvePlan: async () => {
+      approvals += 1;
+      return false;
+    },
+  });
+
+  assert.equal(approvals, 0);
+  assert.equal(stats.duplicatesRemoved, 5);
+  assert.equal(stats.deleted, 5);
+  assert.equal(stats.deferredDeletes, 1);
+  assert.deepEqual(
+    requests.filter((request) => request.method === "DELETE").map((request) => request.url),
+    copies
+      .slice(1)
+      .map((id) => `https://www.googleapis.com/calendar/v3/calendars/calendar-id/events/${id}`),
+  );
+});
+
+test("two devices syncing the same vault at once leave one event, not two", async () => {
+  const calendar = new Map<string, Record<string, unknown>>();
+  /** Stands in for Google, which allows one event per ID. */
+  const google: GoogleTransport = async (request) => {
+    if (request.url === TOKEN_ENDPOINT) return response({ access_token: "access-token" });
+    const url = new URL(request.url);
+    if (request.method === "GET") {
+      const vaultId = url.searchParams.get("privateExtendedProperty");
+      const items = Array.from(calendar.values()).filter((event) => {
+        const properties = (event as { extendedProperties: { private: Record<string, string> } })
+          .extendedProperties.private;
+        return `obsidianVaultId=${properties.obsidianVaultId}` === vaultId;
+      });
+      return response({ items });
+    }
+    if (request.method === "POST") {
+      const body = requestBody(request);
+      // With no ID in the request, Google makes one up, which is how duplicates appeared.
+      const id = body.id ? String(body.id) : `generated-${calendar.size + 1}`;
+      if (calendar.has(id)) {
+        return response(
+          { error: { message: "duplicate" } },
+          409,
+          '{"error":{"message":"duplicate"}}',
+        );
+      }
+      calendar.set(id, { ...body, created: "2026-08-18T09:00:00Z" });
+      return response(body);
+    }
+    if (request.method === "PATCH") {
+      const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
+      calendar.set(id, { ...calendar.get(id), ...requestBody(request), id });
+      return response({});
+    }
+    throw new Error(`Unexpected request: ${request.method} ${request.url}`);
+  };
+
+  const standup = desired("Notes.md::line-1-1", "Standup");
+  const [first, second] = await Promise.all([
+    client(google).reconcile([standup]),
+    client(google).reconcile([standup]),
+  ]);
+
+  assert.equal(first?.created, 1);
+  assert.equal(second?.created, 1);
+  assert.equal(calendar.size, 1);
+  assert.deepEqual(Array.from(calendar.keys()), [standup.remoteEventId]);
 });

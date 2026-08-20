@@ -41,6 +41,8 @@ export interface SyncStats {
   created: number;
   updated: number;
   deleted: number;
+  /** Extra copies removed, counted inside `deleted` as well. */
+  duplicatesRemoved: number;
   unchanged: number;
   /** Deletes that were planned but skipped because part of the vault could not be read. */
   deferredDeletes: number;
@@ -112,6 +114,8 @@ interface GoogleEventList {
 }
 
 interface EventBody {
+  id?: string;
+  status?: string;
   summary: string;
   start: CalendarDateTime;
   end: CalendarDateTime;
@@ -141,9 +145,10 @@ export class GcalClient implements GcalGateway {
 
     const summary = reconciliationSummary(plan);
     const maxChanges = options.maxChanges ?? DEFAULT_MAX_CHANGES_PER_SYNC;
-    if (summary.total > maxChanges) {
+    const requests = summary.total + plan.duplicates.length;
+    if (requests > maxChanges) {
       throw new Error(
-        `Google Calendar sync stopped because ${summary.total} changes exceed the per-sync limit of ${maxChanges}. Review the notes that declare these events, then raise the limit in the plugin settings if the changes are expected.`,
+        `Google Calendar sync stopped because ${requests} changes exceed the per-sync limit of ${maxChanges}. Review the notes that declare these events, then raise the limit in the plugin settings if the changes are expected.`,
       );
     }
     if (requiresApproval(summary) && !(await options.approvePlan?.(summary))) {
@@ -151,6 +156,7 @@ export class GcalClient implements GcalGateway {
         created: 0,
         updated: 0,
         deleted: 0,
+        duplicatesRemoved: 0,
         unchanged: plan.unchanged.length,
         deferredDeletes,
         pendingApproval: summary,
@@ -162,12 +168,15 @@ export class GcalClient implements GcalGateway {
     for (const update of plan.updates) {
       await this.updateEvent(accessToken, update.eventId, update.event);
     }
-    for (const eventId of plan.deletes) await this.deleteEvent(accessToken, eventId);
+    for (const eventId of [...plan.duplicates, ...plan.deletes]) {
+      await this.deleteEvent(accessToken, eventId);
+    }
 
     return {
       created: plan.creates.length,
       updated: plan.updates.length,
-      deleted: plan.deletes.length,
+      deleted: plan.deletes.length + plan.duplicates.length,
+      duplicatesRemoved: plan.duplicates.length,
       unchanged: plan.unchanged.length,
       deferredDeletes,
       syncedSourceKeys: [
@@ -257,22 +266,39 @@ export class GcalClient implements GcalGateway {
     return events;
   }
 
+  /**
+   * Creates the event under the ID its declaration asks for. A 409 means that ID is taken, by
+   * another device or by an event deleted in Google Calendar, so the event is written in place.
+   */
   private async createEvent(accessToken: string, event: VaultCalendarEvent): Promise<void> {
-    await this.request(
-      accessToken,
-      "POST",
-      `/calendars/${encodeURIComponent(this.calendarId)}/events`,
-      this.eventBody(event),
-    );
+    const body = this.eventBody(event);
+    body.id = event.remoteEventId;
+    const response = await this.transport({
+      url: `${CALENDAR_API}/calendars/${encodeURIComponent(this.calendarId)}/events`,
+      method: "POST",
+      contentType: "application/json",
+      body: JSON.stringify(body),
+      headers: { Authorization: `Bearer ${accessToken}` },
+      throw: false,
+    });
+    if (response.status === 409) {
+      await this.updateEvent(accessToken, event.remoteEventId, event, true);
+      return;
+    }
+    if (response.status < 200 || response.status >= 300) {
+      throw apiError("Google Calendar POST failed", response.status, response.text);
+    }
   }
 
   private async updateEvent(
     accessToken: string,
     eventId: string,
     event: VaultCalendarEvent,
+    restore = false,
   ): Promise<void> {
     const body = this.eventBody(event);
     body.recurrence ??= [];
+    if (restore) body.status = "confirmed";
     await this.request(
       accessToken,
       "PATCH",

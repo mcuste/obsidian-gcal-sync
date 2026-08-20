@@ -4,6 +4,8 @@ export interface GoogleEvent {
   id?: string;
   summary?: string;
   status?: string;
+  /** When Google created the event. Decides which copy of an event is kept. */
+  created?: string;
   start?: CalendarDateTime;
   end?: CalendarDateTime;
   recurrence?: string[];
@@ -16,6 +18,11 @@ export interface ReconciliationPlan {
   creates: VaultCalendarEvent[];
   updates: Array<{ eventId: string; event: VaultCalendarEvent }>;
   deletes: string[];
+  /**
+   * Extra copies of an event that is being kept, left behind by two syncs running at once. One copy
+   * always survives, so removing these deletes nothing the notes still declare.
+   */
+  duplicates: string[];
   /** Source keys already correct on Google, so they need no request. */
   unchanged: string[];
 }
@@ -33,23 +40,16 @@ export function planReconciliation(
     creates: [],
     updates: [],
     deletes: [],
+    duplicates: [],
     unchanged: [],
   };
 
-  for (const [sourceKey, desired] of desiredByKey) {
-    if (
-      affectedSourceKeys &&
-      !affectedSourceKeys.has(sourceKey) &&
-      !affectedSourceKeys.has(desired.remoteSourceKey)
-    ) {
-      continue;
-    }
+  for (const desired of desiredByKey.values()) {
+    const keys = storedKeys(desired);
+    if (affectedSourceKeys && !keys.some((key) => affectedSourceKeys.has(key))) continue;
 
-    const currentEvents = remoteByKey.get(desired.remoteSourceKey) ?? [];
-    const legacyEvents =
-      desired.remoteSourceKey === sourceKey ? [] : (remoteByKey.get(sourceKey) ?? []);
-    const matching = [...currentEvents, ...legacyEvents];
-    const current = matching[0];
+    const matching = keys.flatMap((key) => remoteByKey.get(key) ?? []);
+    const current = survivor(matching);
     if (!current) {
       plan.creates.push(desired);
     } else {
@@ -61,11 +61,10 @@ export function planReconciliation(
       }
     }
 
-    for (const duplicate of matching.slice(1)) {
-      plan.deletes.push(requireEventId(duplicate));
+    for (const duplicate of matching) {
+      if (duplicate !== current) plan.duplicates.push(requireEventId(duplicate));
     }
-    remoteByKey.delete(sourceKey);
-    remoteByKey.delete(desired.remoteSourceKey);
+    for (const key of keys) remoteByKey.delete(key);
   }
 
   const stale: GoogleEvent[] = [];
@@ -108,6 +107,29 @@ function reanchorMovedEvents(plan: ReconciliationPlan, stale: GoogleEvent[]): vo
     stale.splice(stale.indexOf(only), 1);
   }
   plan.creates = unmatched;
+}
+
+/** The keys a declaration may be stored under: its current key, then the older unhashed key. */
+function storedKeys(desired: VaultCalendarEvent): string[] {
+  if (desired.sourceKey === desired.remoteSourceKey) return [desired.remoteSourceKey];
+  return [desired.remoteSourceKey, desired.sourceKey];
+}
+
+/**
+ * Keeps the copy Google created first: it holds the guest replies and reminders, and every device
+ * reads the same times, so no two devices keep a different copy and delete each other's.
+ */
+function survivor(matching: GoogleEvent[]): GoogleEvent | undefined {
+  let kept = matching[0];
+  for (const event of matching) {
+    if (kept && createdAt(event) < createdAt(kept)) kept = event;
+  }
+  return kept;
+}
+
+function createdAt(event: GoogleEvent): number {
+  const created = Date.parse(event.created ?? "");
+  return Number.isNaN(created) ? Number.POSITIVE_INFINITY : created;
 }
 
 function groupRemoteEvents(events: GoogleEvent[]): Map<string, GoogleEvent[]> {

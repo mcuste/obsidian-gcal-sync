@@ -6,6 +6,19 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- Two devices syncing the same vault no longer duplicate events. Each declaration now reserves the
+  Google event ID it is created under, so a second device asking for that ID at the same moment
+  writes the existing event instead of adding a copy.
+- The vault ID is now always the hash of the vault name, rather than a stored one taking precedence,
+  so two devices holding the same vault agree on it and stop duplicating each other's events. Events
+  stamped with a random ID kept by an earlier release are no longer recognized, and have to be
+  deleted in Google Calendar.
+- Extra copies of an event are removed without waiting for approval and without being held back
+  while a note cannot be read, since one copy always survives. The copy Google created first is the
+  one kept, and the sync notice counts the copies removed.
+
 ## [0.3.2] - 2026-08-20
 
 ### Changed

@@ -7,7 +7,8 @@ Only what is needed to build the event on Google Calendar:
 - The event title, which is the text before the directive, or the note name.
 - Start time, end time, and the time zone they are read in.
 - The repeat rule, if there is one.
-- A SHA-256 hash of the vault ID and the note path with locator, used to recognize the event later.
+- A SHA-256 hash of the vault ID and the note path with locator, used to recognize the event later,
+  and the same hash re-encoded as the event's Google ID.
 - The vault ID, a SHA-256 hash of the vault name.
 
 Note paths, folder names, tags, and the rest of your note content are never uploaded. Titles go up

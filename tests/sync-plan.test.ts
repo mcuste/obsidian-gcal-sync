@@ -12,11 +12,17 @@ function desired(sourceKey: string, summary: string): VaultCalendarEvent {
   return {
     sourceKey,
     remoteSourceKey: remoteKey(sourceKey),
+    remoteEventId: eventId(sourceKey),
     summary,
     start: { dateTime: "2026-08-18T09:00:00-04:00", timeZone: "America/New_York" },
     end: { dateTime: "2026-08-18T10:00:00-04:00", timeZone: "America/New_York" },
     recurrence: ["RRULE:FREQ=WEEKLY"],
   };
+}
+
+/** Mirrors the event ID the parser reserves for a declaration. */
+function eventId(sourceKey: string): string {
+  return `${sourceKey}-reserved-id`;
 }
 
 function remote(
@@ -75,14 +81,28 @@ test("incremental plans do not touch sources outside the affected set", () => {
   assert.equal(plan.deletes.length, 0);
 });
 
-test("keeps one matching event and deletes duplicate managed events", () => {
+test("keeps one matching event and reports duplicate managed events separately", () => {
   const plan = planReconciliation(
     [desired("same", "Same")],
     [remote("first", "same", "Same"), remote("duplicate", "same", "Same")],
   );
 
   assert.deepEqual(plan.unchanged.length, 1);
-  assert.deepEqual(plan.deletes, ["duplicate"]);
+  assert.deepEqual(plan.duplicates, ["duplicate"]);
+  assert.deepEqual(plan.deletes, []);
+});
+
+test("every device keeps the copy Google created first", () => {
+  const plan = planReconciliation(
+    [desired("same", "Same")],
+    [
+      remote("newer-copy", "same", "Same", { created: "2026-08-19T09:00:00Z" }),
+      remote("first-copy", "same", "Same", { created: "2026-08-18T09:00:00Z" }),
+    ],
+  );
+
+  assert.deepEqual(plan.unchanged.length, 1);
+  assert.deepEqual(plan.duplicates, ["newer-copy"]);
 });
 
 test("updates when a recurrence changes", () => {
@@ -110,7 +130,13 @@ test("ignores remote events without managed source metadata", () => {
     ],
   );
 
-  assert.deepEqual(plan, { creates: [], updates: [], deletes: [], unchanged: [] });
+  assert.deepEqual(plan, {
+    creates: [],
+    updates: [],
+    deletes: [],
+    duplicates: [],
+    unchanged: [],
+  });
 });
 
 test("fails safely when an actionable remote event has no ID", () => {

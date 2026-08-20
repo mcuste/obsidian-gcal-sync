@@ -11,6 +11,8 @@ export interface VaultCalendarEvent {
   sourceKey: string;
   /** The identity stored on Google, hashed so note and folder names are not uploaded. */
   remoteSourceKey: string;
+  /** The Google event ID this declaration is created under. */
+  remoteEventId: string;
   summary: string;
   start: CalendarDateTime;
   end: CalendarDateTime;
@@ -341,6 +343,7 @@ function addEvent(
     result.events.push({
       sourceKey: input.sourceKey,
       remoteSourceKey: makeRemoteSourceKey(options.vaultId, input.sourceKey),
+      remoteEventId: makeRemoteEventId(options.vaultId, input.sourceKey),
       summary: input.summary,
       start: schedule.start,
       end: schedule.end,
@@ -770,12 +773,28 @@ function makeSourceKey(path: string, locator: string): string {
 }
 
 export function makeRemoteSourceKey(vaultId: string, sourceKey: string): string {
-  const digest = createHash("sha256")
-    .update(vaultId)
-    .update("\0")
-    .update(sourceKey)
-    .digest("base64url");
-  return `v1:${digest}`;
+  return `v1:${identityDigest(vaultId, sourceKey).toString("base64url")}`;
+}
+
+/**
+ * The event ID a declaration always asks for. Two devices creating the same event ask for this one
+ * ID, so Google keeps the first and rejects the second instead of adding a copy.
+ */
+export function makeRemoteEventId(vaultId: string, sourceKey: string): string {
+  let id = "";
+  for (const byte of identityDigest(vaultId, sourceKey)) {
+    id += base32HexDigit(byte & 31) + base32HexDigit(byte >> 5);
+  }
+  return id;
+}
+
+/** Google accepts event IDs written in base32hex: the digits, then the letters a to v. */
+function base32HexDigit(value: number): string {
+  return String.fromCharCode(value < 10 ? 48 + value : 87 + value);
+}
+
+function identityDigest(vaultId: string, sourceKey: string): Buffer {
+  return createHash("sha256").update(vaultId).update("\0").update(sourceKey).digest();
 }
 
 function normalizeDayName(value: string): string {
