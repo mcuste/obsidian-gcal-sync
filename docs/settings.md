@@ -31,8 +31,9 @@ synced events apart from your everyday calendar.
 
 **Event time zone** is the IANA zone that starts written without `Z` or a UTC offset are read in,
 for example `America/New_York`. Leave it empty to follow whatever zone this device is in, which is
-what the placeholder shows. Invalid values are ignored. Changing it moves every event that does not
-pin its own offset. [Event syntax](event-syntax.md#start-and-duration) has the rules it applies to.
+what the placeholder shows. An unrecognized zone is rejected with a message under the setting.
+Changing it moves every event that does not pin its own offset.
+[Event syntax](event-syntax.md#start-and-duration) has the rules it applies to.
 
 **Full scan interval** is how many minutes pass between full vault reconciliations. Default 15.
 Edits to individual notes sync within about a second whatever this is set to.
@@ -53,7 +54,7 @@ protects you from a note or script that generates events in bulk.
 palette. This is the only path that can approve a plan waiting for review.
 
 The tab then ends with two reference sections rather than settings: **Event syntax** summarizes
-[Event syntax](event-syntax.md) in a paragraph, and **Trust model** restates who can change your
+[Event syntax](event-syntax.md) across a few rows, and **Trust model** restates who can change your
 calendar, covered in [Security and privacy](security-and-privacy.md#trust-model).
 
 ## Where settings live

@@ -5,7 +5,9 @@ import {
   Notice,
   PluginSettingTab,
   SecretComponent,
-  Setting,
+  type Setting,
+  type SettingDefinitionGroup,
+  type SettingDefinitionItem,
 } from "obsidian";
 import { DEFAULT_MAX_CHANGES_PER_SYNC, type GcalInfo, revokeGoogleAuthorization } from "./gcal";
 import {
@@ -16,6 +18,7 @@ import {
 import type GcalSyncPlugin from "./main";
 
 const GOOGLE_PERMISSIONS_URL = "https://myaccount.google.com/permissions";
+const DEFAULT_SYNC_INTERVAL_MINUTES = 15;
 
 export interface GcalSyncSettings {
   calendarId: string;
@@ -39,7 +42,7 @@ export function defaultSettings(vaultId: string): GcalSyncSettings {
     clientSecretSecret: "",
     refreshTokenSecret: "",
     googleAuthorizationVersion: 0,
-    syncIntervalMinutes: 15,
+    syncIntervalMinutes: DEFAULT_SYNC_INTERVAL_MINUTES,
     timeZone: "",
     vaultId,
     syncFolders: [],
@@ -81,181 +84,217 @@ export class GcalSettingTab extends PluginSettingTab {
     this.cancelAuthorization();
   }
 
-  override display(): void {
-    this.containerEl.empty();
+  override getSettingDefinitions(): SettingDefinitionItem[] {
+    return [
+      this.googleOAuthGroup(),
+      this.calendarSyncGroup(),
+      eventSyntaxGroup(),
+      trustModelGroup(),
+    ];
+  }
 
-    new Setting(this.containerEl).setName("Google OAuth").setHeading();
-    new Setting(this.containerEl)
-      .setName("OAuth client ID")
-      .setDesc("Select or create an Obsidian secret containing the Desktop OAuth client ID.")
-      .addComponent((element) =>
-        new SecretComponent(this.app, element)
-          .setValue(this.plugin.settings.clientIdSecret)
-          .onChange(async (value) => {
-            this.plugin.settings.clientIdSecret = value;
-            await this.plugin.saveSettings();
-          }),
-      );
+  /** Synced folders are stored as a list but edited as lines. */
+  override getControlValue(key: string): unknown {
+    const settings = this.plugin.settings;
+    switch (key) {
+      case "timeZone":
+        return settings.timeZone;
+      case "syncIntervalMinutes":
+        return settings.syncIntervalMinutes;
+      case "syncFolders":
+        return settings.syncFolders.join("\n");
+      case "maxChangesPerSync":
+        return settings.maxChangesPerSync;
+      default:
+        return undefined;
+    }
+  }
 
-    new Setting(this.containerEl)
-      .setName("OAuth client secret")
-      .setDesc("Select or create the matching client secret. Leave empty if the client has none.")
-      .addComponent((element) =>
-        new SecretComponent(this.app, element)
-          .setValue(this.plugin.settings.clientSecretSecret)
-          .onChange(async (value) => {
-            this.plugin.settings.clientSecretSecret = value;
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(this.containerEl)
-      .setName("Google authorization")
-      .setDesc(
-        "Grants event, calendar-list, and calendar-creation access, then saves the refresh token in Obsidian SecretStorage.",
-      )
-      .addButton((button) => {
-        this.resetAuthorizeButton(button);
-        button.onClick(async () => {
-          // While a sign-in is in flight the same button cancels it, so a browser tab the user
-          // closed or never finished does not leave the setting stuck until the deadline.
-          if (this.authorization) {
-            this.cancelAuthorization();
-            return;
-          }
-          await this.runAuthorization(button);
-        });
-      });
-
-    if (this.plugin.settings.refreshTokenSecret) {
-      new Setting(this.containerEl)
-        .setName("Disconnect Google")
-        .setDesc(
-          `Revokes the stored refresh token with Google and clears it from this vault. If you are removing the plugin, also delete its access at ${GOOGLE_PERMISSIONS_URL}.`,
-        )
-        .addButton((button) =>
-          button
-            .setButtonText("Disconnect and revoke")
-            .setWarning()
-            .onClick(async () => {
-              button.setDisabled(true).setButtonText("Revoking…");
-              try {
-                await this.disconnect();
-                new Notice("Google Calendar authorization revoked");
-              } catch (error) {
-                new Notice(
-                  `${errorMessage(error)}. The token was cleared from this vault; revoke it at ${GOOGLE_PERMISSIONS_URL}.`,
-                  10_000,
-                );
-              } finally {
-                this.display();
-              }
-            }),
-        );
+  override async setControlValue(key: string, value: unknown): Promise<void> {
+    const settings = this.plugin.settings;
+    switch (key) {
+      case "timeZone":
+        settings.timeZone = String(value).trim();
+        break;
+      case "syncIntervalMinutes":
+        settings.syncIntervalMinutes = Number(value);
+        break;
+      case "syncFolders":
+        settings.syncFolders = parseSyncFolders(String(value));
+        break;
+      case "maxChangesPerSync":
+        settings.maxChangesPerSync = Number(value);
+        break;
+      default:
+        return;
     }
 
-    new Setting(this.containerEl).setName("Calendar sync").setHeading();
-    this.displayCalendarSettings();
+    await this.plugin.saveSettings();
+    if (key === "syncIntervalMinutes") this.plugin.resetPeriodicSync();
+  }
 
-    new Setting(this.containerEl)
-      .setName("Event time zone")
-      .setDesc(
-        `IANA time zone for starts written without a UTC offset, such as America/New_York. ` +
-          `Leave empty to follow this device, currently ${systemTimeZone()}.`,
-      )
-      .addText((text) =>
-        text
-          .setPlaceholder(systemTimeZone())
-          .setValue(this.plugin.settings.timeZone)
-          .onChange(async (value) => {
-            const trimmed = value.trim();
-            if (trimmed && !isTimeZone(trimmed)) return;
-            this.plugin.settings.timeZone = trimmed;
-            await this.plugin.saveSettings();
-          }),
-      );
+  private googleOAuthGroup(): SettingDefinitionGroup {
+    return {
+      type: "group",
+      heading: "Google OAuth",
+      items: [
+        {
+          name: "OAuth client ID",
+          desc: "Select or create an Obsidian secret containing the Desktop OAuth client ID.",
+          render: (setting) => this.renderSecretPicker(setting, "clientIdSecret"),
+        },
+        {
+          name: "OAuth client secret",
+          desc: "Select or create the matching client secret. Leave empty if the client has none.",
+          render: (setting) => this.renderSecretPicker(setting, "clientSecretSecret"),
+        },
+        {
+          name: "Google authorization",
+          desc: "Grants event, calendar-list, and calendar-creation access, then saves the refresh token in Obsidian SecretStorage.",
+          render: (setting) => this.renderAuthorization(setting),
+        },
+        {
+          name: "Disconnect Google",
+          desc: `Revokes the stored refresh token with Google and clears it from this vault. If you are removing the plugin, also delete its access at ${GOOGLE_PERMISSIONS_URL}.`,
+          visible: () => Boolean(this.plugin.settings.refreshTokenSecret),
+          render: (setting) => this.renderDisconnect(setting),
+        },
+      ],
+    };
+  }
 
-    new Setting(this.containerEl)
-      .setName("Full scan interval")
-      .setDesc("Minutes between full vault reconciliations. File changes sync incrementally.")
-      .addText((text) =>
-        text.setValue(String(this.plugin.settings.syncIntervalMinutes)).onChange(async (value) => {
-          const minutes = Number.parseInt(value, 10);
-          if (!Number.isInteger(minutes) || minutes < 1) return;
-          this.plugin.settings.syncIntervalMinutes = minutes;
+  private calendarSyncGroup(): SettingDefinitionGroup {
+    return {
+      type: "group",
+      heading: "Calendar sync",
+      items: [
+        {
+          name: "Calendar",
+          desc: "Authorize Google to load writable calendars.",
+          render: (setting) => this.renderCalendarPicker(setting),
+        },
+        {
+          name: "Create calendar",
+          desc: "Creates a secondary Google Calendar and selects it for future syncs.",
+          visible: () => this.canSelectCalendars(),
+          render: (setting) => this.renderCalendarCreator(setting),
+        },
+        {
+          name: "Event time zone",
+          desc:
+            `IANA time zone for starts written without a UTC offset, such as America/New_York. ` +
+            `Leave empty to follow this device, currently ${systemTimeZone()}.`,
+          control: {
+            type: "text",
+            key: "timeZone",
+            placeholder: systemTimeZone(),
+            validate: validateTimeZone,
+          },
+        },
+        {
+          name: "Full scan interval",
+          desc: "Minutes between full vault reconciliations. File changes sync incrementally.",
+          control: {
+            type: "number",
+            key: "syncIntervalMinutes",
+            defaultValue: DEFAULT_SYNC_INTERVAL_MINUTES,
+            min: 1,
+            step: 1,
+            validate: (value) => validateCount(value, "minutes"),
+          },
+        },
+        {
+          name: "Synced folders",
+          desc:
+            "One vault-relative folder per line. Only notes inside these folders may declare events. " +
+            "Leave empty to scan the whole vault. Use this when other people can write to the vault.",
+          control: {
+            type: "textarea",
+            key: "syncFolders",
+            placeholder: "Calendar\nProjects/Planning",
+          },
+        },
+        {
+          name: "Change limit per sync",
+          desc:
+            "Stops a sync that would create, update, or delete more events than this. Guards against " +
+            "a note that declares events in bulk.",
+          control: {
+            type: "number",
+            key: "maxChangesPerSync",
+            defaultValue: DEFAULT_MAX_CHANGES_PER_SYNC,
+            min: 1,
+            step: 1,
+            validate: (value) => validateCount(value, "events"),
+          },
+        },
+        {
+          name: "Sync now",
+          desc: "Scans every Markdown note and reconciles all managed Google Calendar events.",
+          render: (setting) => this.renderSyncNow(setting),
+        },
+      ],
+    };
+  }
+
+  private renderSecretPicker(setting: Setting, key: "clientIdSecret" | "clientSecretSecret"): void {
+    setting.addComponent((element) =>
+      new SecretComponent(this.app, element)
+        .setValue(this.plugin.settings[key])
+        .onChange(async (value) => {
+          this.plugin.settings[key] = value;
           await this.plugin.saveSettings();
-          this.plugin.resetPeriodicSync();
         }),
-      );
+    );
+  }
 
-    new Setting(this.containerEl)
-      .setName("Synced folders")
-      .setDesc(
-        "One vault-relative folder per line. Only notes inside these folders may declare events. " +
-          "Leave empty to scan the whole vault. Use this when other people can write to the vault.",
-      )
-      .addTextArea((text) =>
-        text
-          .setPlaceholder("Calendar\nProjects/Planning")
-          .setValue(this.plugin.settings.syncFolders.join("\n"))
-          .onChange(async (value) => {
-            this.plugin.settings.syncFolders = parseSyncFolders(value);
-            await this.plugin.saveSettings();
-          }),
-      );
+  private renderAuthorization(setting: Setting): void {
+    setting.addButton((button) => {
+      this.resetAuthorizeButton(button);
+      button.onClick(async () => {
+        // While a sign-in is in flight the same button cancels it, so a browser tab the user
+        // closed or never finished does not leave the setting stuck until the deadline.
+        if (this.authorization) {
+          this.cancelAuthorization();
+          return;
+        }
+        await this.runAuthorization(button);
+      });
+    });
+  }
 
-    new Setting(this.containerEl)
-      .setName("Change limit per sync")
-      .setDesc(
-        "Stops a sync that would create, update, or delete more events than this. Guards against " +
-          "a note that declares events in bulk.",
-      )
-      .addText((text) =>
-        text.setValue(String(this.plugin.settings.maxChangesPerSync)).onChange(async (value) => {
-          const limit = Number.parseInt(value, 10);
-          if (!Number.isInteger(limit) || limit < 1) return;
-          this.plugin.settings.maxChangesPerSync = limit;
-          await this.plugin.saveSettings();
-        }),
-      );
-
-    new Setting(this.containerEl)
-      .setName("Sync now")
-      .setDesc("Scans every Markdown note and reconciles all managed Google Calendar events.")
-      .addButton((button) =>
-        button.setButtonText("Sync").onClick(async () => {
-          button.setDisabled(true);
+  private renderDisconnect(setting: Setting): void {
+    setting.addButton((button) =>
+      button
+        .setButtonText("Disconnect and revoke")
+        .setWarning()
+        .onClick(async () => {
+          button.setDisabled(true).setButtonText("Revoking…");
           try {
-            await this.plugin.syncNow(true);
+            await this.disconnect();
+            new Notice("Google Calendar authorization revoked");
+          } catch (error) {
+            new Notice(
+              `${errorMessage(error)}. The token was cleared from this vault; revoke it at ${GOOGLE_PERMISSIONS_URL}.`,
+              10_000,
+            );
           } finally {
-            button.setDisabled(false);
+            this.update();
           }
         }),
-      );
-
-    new Setting(this.containerEl).setName("Event syntax").setHeading();
-    new Setting(this.containerEl).setDesc(
-      "Inline, in backticks, titled by the text before it: " +
-        "Design review `gcal:2026-08-18T14:00/PT1H`. Add `gcal-repeat:weekly` to make it recur. " +
-        "Only a code span holding nothing but directives counts, so a note can describe the " +
-        "syntax without declaring events. " +
-        "In note properties, titled by the note name: gcal: 2026-08-18. For several events, use a " +
-        "list of maps with when, title, and repeat fields. " +
-        "Starts: a date alone is all-day, a time alone is today, and a date with a time uses the " +
-        "event time zone above unless you add Z or an offset. Times are written to the minute. " +
-        "A duration follows a slash and defaults to one hour. " +
-        "Repeat rules: daily, weekly, monthly, quarterly, yearly, weekdays, monday-thursday, " +
-        "every-2-weeks, or an RRULE. " +
-        "Moving a declaration or renaming a note keeps its events, so there is no id to write.",
     );
+  }
 
-    new Setting(this.containerEl).setName("Trust model").setHeading();
-    new Setting(this.containerEl).setDesc(
-      "Any note in a synced folder can create, change, or delete events on the selected calendar, " +
-        "using your Google authorization. Treat write access to those folders as write access to " +
-        "the calendar. If other people or automations can write to this vault, restrict Synced " +
-        "folders to notes you control. Note and folder names are hashed before they reach Google, " +
-        "but event titles are uploaded as written.",
+  private renderSyncNow(setting: Setting): void {
+    setting.addButton((button) =>
+      button.setButtonText("Sync").onClick(async () => {
+        button.setDisabled(true);
+        try {
+          await this.plugin.syncNow(true);
+        } finally {
+          button.setDisabled(false);
+        }
+      }),
     );
   }
 
@@ -273,13 +312,18 @@ export class GcalSettingTab extends PluginSettingTab {
     await revokeGoogleAuthorization(refreshToken);
   }
 
-  private displayCalendarSettings(): void {
-    const selectedId = this.plugin.settings.calendarId;
-    const calendarSetting = new Setting(this.containerEl)
-      .setName("Calendar")
-      .setDesc("Authorize Google to load writable calendars.");
+  /** Selecting and creating calendars needs the scopes granted by the current sign-in flow. */
+  private canSelectCalendars(): boolean {
+    return (
+      Boolean(this.plugin.settings.refreshTokenSecret) &&
+      this.plugin.settings.googleAuthorizationVersion >= GOOGLE_AUTHORIZATION_VERSION
+    );
+  }
 
-    calendarSetting.addDropdown((dropdown) => {
+  private renderCalendarPicker(setting: Setting): void {
+    const selectedId = this.plugin.settings.calendarId;
+
+    setting.addDropdown((dropdown) => {
       dropdown
         .addOption(selectedId, selectedId)
         .setValue(selectedId)
@@ -289,26 +333,24 @@ export class GcalSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       if (!this.plugin.settings.refreshTokenSecret) return;
-      if (this.plugin.settings.googleAuthorizationVersion < GOOGLE_AUTHORIZATION_VERSION) {
-        calendarSetting.setDesc(
-          "Authorize Google again to grant calendar selection and creation access.",
-        );
+      if (!this.canSelectCalendars()) {
+        setting.setDesc("Authorize Google again to grant calendar selection and creation access.");
         return;
       }
 
-      calendarSetting.addButton((button) => {
+      setting.addButton((button) => {
         const loadCalendars = async (): Promise<void> => {
           button.setDisabled(true);
           dropdown.setDisabled(true);
-          calendarSetting.setDesc("Loading writable calendars from Google…");
+          setting.setDesc("Loading writable calendars from Google…");
           try {
             const calendars = await this.plugin.listWritableCalendars();
             this.populateCalendarDropdown(dropdown, calendars, selectedId);
-            calendarSetting.setDesc(
+            setting.setDesc(
               "Select a writable calendar. Changing calendars does not remove events from the previous calendar.",
             );
           } catch (error) {
-            calendarSetting.setDesc("Could not load calendars. Authorize Google again or retry.");
+            setting.setDesc("Could not load calendars. Authorize Google again or retry.");
             new Notice(errorMessage(error), 10_000);
           } finally {
             button.setDisabled(false);
@@ -319,18 +361,12 @@ export class GcalSettingTab extends PluginSettingTab {
         void loadCalendars();
       });
     });
+  }
 
-    if (
-      !this.plugin.settings.refreshTokenSecret ||
-      this.plugin.settings.googleAuthorizationVersion < GOOGLE_AUTHORIZATION_VERSION
-    ) {
-      return;
-    }
-
+  private renderCalendarCreator(setting: Setting): void {
     let calendarName = "";
-    new Setting(this.containerEl)
-      .setName("Create calendar")
-      .setDesc("Creates a secondary Google Calendar and selects it for future syncs.")
+
+    setting
       .addText((text) =>
         text.setPlaceholder("Obsidian").onChange((value) => {
           calendarName = value;
@@ -350,7 +386,7 @@ export class GcalSettingTab extends PluginSettingTab {
             this.plugin.settings.calendarId = calendar.id;
             await this.plugin.saveSettings();
             new Notice(`Created and selected ${calendar.name}. Sync now to populate it.`);
-            this.display();
+            this.update();
           } catch (error) {
             new Notice(errorMessage(error), 10_000);
             button.setDisabled(false).setButtonText("Create");
@@ -388,7 +424,7 @@ export class GcalSettingTab extends PluginSettingTab {
       await this.authorize(controller.signal);
       this.finishAuthorization(button);
       new Notice("Google Calendar authorization saved");
-      this.display();
+      this.update();
     } catch (error) {
       this.finishAuthorization(button);
       new Notice(errorMessage(error), 10_000);
@@ -442,6 +478,78 @@ export class GcalSettingTab extends PluginSettingTab {
     if (!value) throw new Error(`${label} secret is empty or missing`);
     return value;
   }
+}
+
+/** Reference rows: text the tab ends with, carrying no controls. */
+function eventSyntaxGroup(): SettingDefinitionGroup {
+  return {
+    type: "group",
+    heading: "Event syntax",
+    items: [
+      {
+        name: "Inline declarations",
+        desc:
+          "In backticks, titled by the text before it: " +
+          "Design review `gcal:2026-08-18T14:00/PT1H`. Add `gcal-repeat:weekly` to make it recur. " +
+          "Only a code span holding nothing but directives counts, so a note can describe the " +
+          "syntax without declaring events.",
+      },
+      {
+        name: "Note properties",
+        desc:
+          "In note properties, titled by the note name: gcal: 2026-08-18. For several events, use " +
+          "a list of maps with when, title, and repeat fields.",
+      },
+      {
+        name: "Starts and durations",
+        desc:
+          "A date alone is all-day, a time alone is today, and a date with a time uses the event " +
+          "time zone above unless you add Z or an offset. Times are written to the minute. " +
+          "A duration follows a slash and defaults to one hour.",
+      },
+      {
+        name: "Repeat rules",
+        desc:
+          "daily, weekly, monthly, quarterly, yearly, weekdays, monday-thursday, every-2-weeks, " +
+          "or an RRULE.",
+      },
+      {
+        name: "Event identity",
+        desc: "Moving a declaration or renaming a note keeps its events, so there is no id to write.",
+      },
+    ],
+  };
+}
+
+function trustModelGroup(): SettingDefinitionGroup {
+  return {
+    type: "group",
+    heading: "Trust model",
+    items: [
+      {
+        name: "Notes can change your calendar",
+        desc:
+          "Any note in a synced folder can create, change, or delete events on the selected calendar, " +
+          "using your Google authorization. Treat write access to those folders as write access to " +
+          "the calendar. If other people or automations can write to this vault, restrict Synced " +
+          "folders to notes you control. Note and folder names are hashed before they reach Google, " +
+          "but event titles are uploaded as written.",
+      },
+    ],
+  };
+}
+
+function validateTimeZone(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed && !isTimeZone(trimmed)) {
+    return "Not an IANA time zone. Try America/New_York, or leave it empty.";
+  }
+  return undefined;
+}
+
+function validateCount(value: number, unit: string): string | undefined {
+  if (Number.isInteger(value) && value >= 1) return undefined;
+  return `Enter a whole number of ${unit}, 1 or more.`;
 }
 
 /** Formats a remaining duration as m:ss, floored at zero. */

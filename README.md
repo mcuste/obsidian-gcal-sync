@@ -25,7 +25,7 @@ calendar.
 
 ## Requirements
 
-- Obsidian 1.11.5 or newer, on desktop. Desktop only, because signing in to Google needs a local
+- Obsidian 1.13.0 or newer, on desktop. Desktop only, because signing in to Google needs a local
   callback server.
 - A Google account.
 - **Your own Google Cloud OAuth client.** The plugin ships no credentials of its own, so before the

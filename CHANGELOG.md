@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- The settings tab is built with Obsidian's declarative settings API, so its settings are found by
+  Obsidian's settings search. The event syntax and trust model text is split into named rows.
+- An unrecognized event time zone, or an interval or change limit below 1, is rejected with a
+  message under the setting instead of being ignored.
+- `minAppVersion` is now 1.13.0, the first Obsidian version with the declarative settings API.
+
 ## [0.1.0] - 2026-08-19
 
 ### Added

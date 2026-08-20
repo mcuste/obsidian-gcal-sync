@@ -125,7 +125,7 @@ Requirements that shaped this repository:
 | The id cannot contain `obsidian` and must be unique | `gcal-sync` |
 | Description under 250 characters, ending with a period | "Sync Google Calendar events declared in vault notes." |
 | Node and Electron APIs mean desktop only | `isDesktopOnly: true`, for `node:http` and `node:crypto` |
-| `minAppVersion` is the oldest version that works | `1.11.5`, the first with `SecretComponent` |
+| `minAppVersion` is the oldest version that works | `1.13.0`, the first with declarative settings |
 | Network use must be disclosed in the README | The [network use table](../README.md#network-use) |
 | An account requirement must be disclosed | The same table, plus the OAuth client note below |
 | A license file is required | MIT |
