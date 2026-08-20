@@ -50,12 +50,8 @@ class TestEmitter {
 class TestVault extends TestEmitter {
   private readonly files = new Map<string, { file: TFile; content: string }>();
 
-  constructor(private readonly name = "Notes") {
-    super();
-  }
-
   getName(): string {
-    return this.name;
+    return "Notes";
   }
 
   set(path: string, content: string): TFile {
@@ -139,6 +135,10 @@ class TestTimers implements PluginTimers {
   }
 }
 
+/**
+ * Stands in for the whole calendar client, so it holds one vault's events only: it never filters by
+ * vault ID the way the real listing does. Vault scoping is covered in the GcalClient tests.
+ */
 class InMemoryGateway implements GcalGateway {
   private createdId = 0;
   private completed = 0;
@@ -363,14 +363,14 @@ function setup(
   gateway: GcalGateway,
   storedSettings: Partial<GcalSyncSettings> = {},
   confirmPlan?: (summary: ReconciliationSummary) => Promise<boolean>,
-  vaultName?: string,
 ): {
   plugin: GcalSyncPlugin;
   vault: TestVault;
   workspace: TestWorkspace;
   timers: TestTimers;
+  vaultIds: string[];
 } {
-  const vault = new TestVault(vaultName);
+  const vault = new TestVault();
   const workspace = new TestWorkspace();
   const timers = new TestTimers();
   const metadataCache = new TestEmitter() as TestEmitter & {
@@ -387,8 +387,12 @@ function setup(
       },
     },
   } as unknown as App;
+  const vaultIds: string[] = [];
   const plugin = new GcalSyncPlugin(app, MANIFEST, {
-    createCalendarGateway: () => gateway,
+    createCalendarGateway: (_credentials, _calendarId, vaultId) => {
+      vaultIds.push(vaultId);
+      return gateway;
+    },
     timers,
     ...(confirmPlan ? { confirmPlan } : {}),
   });
@@ -401,7 +405,7 @@ function setup(
     vaultId: VAULT_ID,
     ...storedSettings,
   });
-  return { plugin, vault, workspace, timers };
+  return { plugin, vault, workspace, timers, vaultIds };
 }
 
 test("full lifecycle scan creates, updates, and deletes managed events", async () => {
@@ -611,24 +615,28 @@ test("manual, periodic, and incremental sync triggers run serially", async () =>
   plugin.onunload();
 });
 
-test("a vault opened without stored plugin data reuses its events", async () => {
-  const gateway = new InMemoryGateway();
-  const first = setup(gateway, { vaultId: "" });
-  first.vault.set("Meeting.md", "Standup `gcal:2026-08-18`");
+/** A location the plugin's data.json was never synced to, so no vault ID is stored. */
+function storeWithoutVaultId(): Partial<GcalSyncSettings> {
+  return {
+    calendarId: "calendar-id",
+    clientIdSecret: "client-id-secret",
+    refreshTokenSecret: "refresh-token-secret",
+  };
+}
+
+test("a vault opened without stored plugin data stamps the ID it used before", async () => {
+  const first = setup(new InMemoryGateway());
+  first.plugin.loadData = async () => storeWithoutVaultId();
   await first.plugin.onload();
-  first.workspace.ready();
-  await gateway.waitForCompleted(1);
+  await first.plugin.syncNow(false);
   first.plugin.onunload();
 
-  const second = setup(gateway, { vaultId: "" });
-  second.vault.set("Meeting.md", "Standup `gcal:2026-08-18`");
+  const second = setup(new InMemoryGateway());
+  second.plugin.loadData = async () => storeWithoutVaultId();
   await second.plugin.onload();
-  second.workspace.ready();
-  await gateway.waitForCompleted(2);
+  await second.plugin.syncNow(false);
 
-  assert.deepEqual(
-    gateway.state().map(([, summary, id]) => [summary, id]),
-    [["Standup", "created-1"]],
-  );
+  assert.equal(first.vaultIds.length, 1);
+  assert.deepEqual(second.vaultIds, first.vaultIds);
   second.plugin.onunload();
 });

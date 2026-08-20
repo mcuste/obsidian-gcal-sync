@@ -33,5 +33,6 @@ test("an empty event time zone follows this device", () => {
 test("the vault ID follows the vault name", () => {
   assert.equal(deriveVaultId("Notes"), deriveVaultId("Notes"));
   assert.notEqual(deriveVaultId("Notes"), deriveVaultId("Work"));
-  assert.match(deriveVaultId("Notes"), /^[A-Za-z0-9_-]{22}$/);
+  // Google reads a privateExtendedProperty filter as key=value, so the ID may not contain "=".
+  assert.ok(!deriveVaultId("Notes").includes("="));
 });
