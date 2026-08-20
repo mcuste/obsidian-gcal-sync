@@ -143,7 +143,7 @@ async function withDeadline<T>(
   signal: AbortSignal | undefined,
 ): Promise<T> {
   const stopped = Promise.withResolvers<T>();
-  const timeout = setTimeout(
+  const timeout = window.setTimeout(
     () => stopped.reject(new Error("Google authorization timed out")),
     timeoutMs,
   );
