@@ -1,6 +1,6 @@
 {
   "name": "obsidian-gcal-sync",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Sync Google Calendar events declared in an Obsidian vault.",
   "type": "module",
   "main": "main.js",

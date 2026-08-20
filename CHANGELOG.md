@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-20
+
 ### Fixed
 
 - A note whose only declaration is a repeat on its own, such as `` `gcal-repeat:daily` ``, now
