@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-20
+
 ### Added
 
 - Standalone inline recurrence declarations, such as `` `gcal-repeat:daily` ``, create an all-day
