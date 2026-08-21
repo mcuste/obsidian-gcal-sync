@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- Changing a declaration from an all-day event to a timed one, or back, no longer breaks the sync.
+  Google merges an update into the event it already holds, so the old `date` stayed next to the new
+  `dateTime` and every sync from then on failed with "Invalid start time". Nothing synced at all
+  while that lasted, which left any extra copy of an event on the calendar and every declaration
+  showing the grey "not synced yet" marker.
+
 ## [0.4.0] - 2026-08-20
 
 ### Added

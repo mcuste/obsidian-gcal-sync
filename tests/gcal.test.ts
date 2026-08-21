@@ -195,8 +195,8 @@ test("create and patch bodies preserve source metadata and remove recurrence", a
   assert.deepEqual(requestBody(createRequest), {
     id: "new-reserved-id",
     summary: "New",
-    start: { date: "2026-08-18" },
-    end: { date: "2026-08-19" },
+    start: { date: "2026-08-18", dateTime: null, timeZone: null },
+    end: { date: "2026-08-19", dateTime: null, timeZone: null },
     recurrence: ["RRULE:FREQ=WEEKLY"],
     extendedProperties: {
       private: {
@@ -208,8 +208,8 @@ test("create and patch bodies preserve source metadata and remove recurrence", a
   });
   assert.deepEqual(requestBody(patchRequest), {
     summary: "Changed",
-    start: { date: "2026-08-18" },
-    end: { date: "2026-08-19" },
+    start: { date: "2026-08-18", dateTime: null, timeZone: null },
+    end: { date: "2026-08-19", dateTime: null, timeZone: null },
     recurrence: [],
     extendedProperties: {
       private: {
@@ -218,6 +218,48 @@ test("create and patch bodies preserve source metadata and remove recurrence", a
         obsidianSourceKey: "changed",
       },
     },
+  });
+});
+
+test("retiming an all-day event to a timed one clears the date it used to hold", async () => {
+  const { requests, transport } = recordingTransport((request) => {
+    if (request.url === TOKEN_ENDPOINT) return response({ access_token: "access-token" });
+    if (request.method === "GET") {
+      return response({
+        items: [
+          {
+            id: "exam/id",
+            summary: "Exam",
+            start: { date: "2026-08-27" },
+            end: { date: "2026-08-28" },
+            extendedProperties: { private: managedBy("exam") },
+          },
+        ],
+      });
+    }
+    if (request.method === "PATCH") return response({});
+    throw new Error(`Unexpected request: ${request.method} ${request.url}`);
+  });
+
+  await client(transport).reconcile([
+    {
+      ...desired("exam", "Exam"),
+      start: { dateTime: "2026-08-27T12:45:00", timeZone: "Europe/Berlin" },
+      end: { dateTime: "2026-08-27T13:45:00", timeZone: "Europe/Berlin" },
+    },
+  ]);
+
+  const patchRequest = requests.find((request) => request.method === "PATCH");
+  assert.ok(patchRequest);
+  assert.deepEqual(requestBody(patchRequest).start, {
+    date: null,
+    dateTime: "2026-08-27T12:45:00",
+    timeZone: "Europe/Berlin",
+  });
+  assert.deepEqual(requestBody(patchRequest).end, {
+    date: null,
+    dateTime: "2026-08-27T13:45:00",
+    timeZone: "Europe/Berlin",
   });
 });
 
@@ -535,8 +577,8 @@ test("a create Google rejects as a duplicate patches that event instead of addin
   assert.deepEqual(requestBody(patchRequest), {
     status: "confirmed",
     summary: "New",
-    start: { date: "2026-08-18" },
-    end: { date: "2026-08-19" },
+    start: { date: "2026-08-18", dateTime: null, timeZone: null },
+    end: { date: "2026-08-19", dateTime: null, timeZone: null },
     recurrence: [],
     extendedProperties: {
       private: {

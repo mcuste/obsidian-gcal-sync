@@ -117,12 +117,23 @@ interface EventBody {
   id?: string;
   status?: string;
   summary: string;
-  start: CalendarDateTime;
-  end: CalendarDateTime;
+  start: EventTime;
+  end: EventTime;
   recurrence?: string[];
   extendedProperties: {
     private: Record<string, string>;
   };
+}
+
+/**
+ * Every field is always sent, because a PATCH merges into the stored event: omitting `date` on an
+ * event that is currently all-day leaves it beside the new `dateTime`, which Google rejects with
+ * "Invalid start time". Null clears the field instead.
+ */
+interface EventTime {
+  date: string | null;
+  dateTime: string | null;
+  timeZone: string | null;
 }
 
 export class GcalClient implements GcalGateway {
@@ -322,8 +333,8 @@ export class GcalClient implements GcalGateway {
   private eventBody(event: VaultCalendarEvent): EventBody {
     return {
       summary: event.summary,
-      start: event.start,
-      end: event.end,
+      start: eventTime(event.start),
+      end: eventTime(event.end),
       recurrence: event.recurrence,
       extendedProperties: {
         private: {
@@ -432,6 +443,14 @@ async function refreshAccessToken(
   const token = response.json as { access_token?: string };
   if (!token.access_token) throw new Error("Google OAuth response did not include an access token");
   return token.access_token;
+}
+
+function eventTime(value: CalendarDateTime): EventTime {
+  return {
+    date: value.date ?? null,
+    dateTime: value.dateTime ?? null,
+    timeZone: value.timeZone ?? null,
+  };
 }
 
 function reconciliationSummary(plan: {
