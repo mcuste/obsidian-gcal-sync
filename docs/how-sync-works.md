@@ -1,6 +1,9 @@
 # How sync works
 
 Sync goes one way. Your notes are the source of truth, and each sync makes the calendar match them.
+Sync itself never writes to a note. The only thing that does is the date picker, and only the one
+declaration you opened it on, when you press Apply.
+[Picking a date](event-syntax.md#picking-a-date-instead-of-typing-one) covers it.
 
 ```
 your notes ──> plugin compares ──> Google Calendar

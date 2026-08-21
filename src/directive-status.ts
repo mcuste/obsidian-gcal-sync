@@ -8,8 +8,16 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { editorInfoField, type MarkdownPostProcessor } from "obsidian";
+import { editorInfoField, type MarkdownPostProcessor, Notice } from "obsidian";
 import { buildChip, buildStatusMarker, chipKey } from "./directive-chip";
+import {
+  type DirectiveSource,
+  readDraft,
+  toDirectiveSource,
+  type WrittenDirective,
+} from "./directive-draft";
+import { closeDirectivePicker, openDirectivePicker } from "./directive-picker";
+import { readSpanDirectives, rewriteSpan } from "./directive-span";
 import { type DisplayOptions, describeEvent, type EventDisplay } from "./event-display";
 import {
   findLineDirectives,
@@ -17,6 +25,7 @@ import {
   parseSchedule,
   type VaultCalendarEvent,
 } from "./event-parser";
+import type { EntrySource } from "./frontmatter-entry";
 import { findFrontmatterStarts } from "./frontmatter-scan";
 import type { DirectiveStatus } from "./main";
 
@@ -24,6 +33,7 @@ import type { DirectiveStatus } from "./main";
 const MAX_FRONTMATTER_LINES = 300;
 const OPENING_FENCE = /^---\s*$/;
 const CLOSING_FENCE = /^(?:---|\.\.\.)\s*$/;
+const MOVED_NOTICE = "That declaration moved, so nothing was changed";
 
 export interface DirectiveView {
   status: DirectiveStatus;
@@ -39,26 +49,46 @@ export interface DirectiveStatusSource {
   displayOptions(): DisplayOptions;
   /** False leaves every declaration as written, with only a status marker beside it. */
   chipsEnabled(): boolean;
+  /** False leaves every declaration read-only, with no picker on its icon. */
+  pickerEnabled(): boolean;
   /** True when Obsidian leaves the note properties in the editor text, not in its widget. */
   propertiesInEditor(): boolean;
   /** Registers a callback for when any declaration changes, and returns its remover. */
   onStatusChange(listener: () => void): () => void;
+  /** A note-properties entry as written, for the picker to start from. */
+  entrySource(path: string, entryIndex: number): EntrySource | undefined;
+  /** Writes a picked declaration back to the note. Reports its own failures. */
+  applyToLine(
+    path: string,
+    line: number,
+    occurrence: number,
+    written: WrittenDirective,
+  ): Promise<void>;
+  applyToEntry(path: string, entryIndex: number, written: WrittenDirective): Promise<void>;
 }
+
+/** Opens the picker for one declaration, anchored to the icon that was clicked. */
+type PickOpener = (anchor: HTMLElement) => void;
 
 class ChipWidget extends WidgetType {
   constructor(
     private readonly status: DirectiveStatus,
     private readonly display: EventDisplay,
+    private readonly pick: PickOpener | undefined,
   ) {
     super();
   }
 
+  private key(): string {
+    return chipKey(this.status, this.display, this.pick !== undefined);
+  }
+
   override eq(other: ChipWidget): boolean {
-    return chipKey(other.status, other.display) === chipKey(this.status, this.display);
+    return other.key() === this.key();
   }
 
   override toDOM(view: EditorView): HTMLElement {
-    const chip = buildChip(this.status, this.display);
+    const chip = buildChip(this.status, this.display, this.pick ? { onPick: this.pick } : {});
     // Moving the cursor here is what brings the text back; the click alone would not move it.
     chip.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -74,16 +104,19 @@ class ChipWidget extends WidgetType {
 }
 
 class StatusWidget extends WidgetType {
-  constructor(private readonly status: DirectiveStatus) {
+  constructor(
+    private readonly status: DirectiveStatus,
+    private readonly pick: PickOpener | undefined,
+  ) {
     super();
   }
 
   override eq(other: StatusWidget): boolean {
-    return other.status === this.status;
+    return other.status === this.status && (other.pick === undefined) === (this.pick === undefined);
   }
 
   override toDOM(): HTMLElement {
-    return buildStatusMarker(this.status);
+    return buildStatusMarker(this.status, this.pick);
   }
 }
 
@@ -122,6 +155,7 @@ function decorate(view: EditorView, source: DirectiveStatusSource): DecorationSe
   const ranges: Range<Decoration>[] = [];
   const context: RenderContext = {
     chips: source.chipsEnabled(),
+    picker: source.pickerEnabled(),
     options: source.displayOptions(),
     selection: view.state.selection,
   };
@@ -133,11 +167,13 @@ function decorate(view: EditorView, source: DirectiveStatusSource): DecorationSe
       for (const found of findLineDirectives(line.text)) {
         const declaration = source.directiveAt(path, line.number - 1, found.occurrence);
         if (!declaration) continue;
+        const inner = line.text.slice(found.innerFrom, found.innerTo);
         addDeclaration(ranges, context, declaration, {
           from: line.from + found.from,
           to: line.from + found.to,
           innerFrom: line.from + found.innerFrom,
           innerTo: line.from + found.innerTo,
+          pick: linePicker(view, context, found.occurrence, inner, declaration),
         });
       }
       position = line.to + 1;
@@ -153,16 +189,18 @@ function decorate(view: EditorView, source: DirectiveStatusSource): DecorationSe
 
 interface RenderContext {
   chips: boolean;
+  picker: boolean;
   options: DisplayOptions;
   selection: EditorSelection;
 }
 
-/** Where a declaration sits, with and without whatever delimits it. */
+/** Where a declaration sits, with and without whatever delimits it, and how to pick it. */
 interface DeclarationRange {
   from: number;
   to: number;
   innerFrom: number;
   innerTo: number;
+  pick?: PickOpener;
 }
 
 function addDeclaration(
@@ -174,7 +212,7 @@ function addDeclaration(
   const display = chipFor(context, declaration, at);
   if (display) {
     ranges.push(
-      Decoration.replace({ widget: new ChipWidget(declaration.status, display) }).range(
+      Decoration.replace({ widget: new ChipWidget(declaration.status, display, at.pick) }).range(
         at.innerFrom,
         at.innerTo,
       ),
@@ -188,7 +226,9 @@ function addDeclaration(
     ),
   );
   ranges.push(
-    Decoration.widget({ widget: new StatusWidget(declaration.status), side: 1 }).range(at.to),
+    Decoration.widget({ widget: new StatusWidget(declaration.status, at.pick), side: 1 }).range(
+      at.to,
+    ),
   );
 }
 
@@ -209,6 +249,120 @@ function chipFor(
 
 function touches(selection: EditorSelection, from: number, to: number): boolean {
   return selection.ranges.some((range) => range.from <= to && range.to >= from);
+}
+
+/** Undefined for a span `readSpanDirectives` does not accept, which leaves it as written. */
+function linePicker(
+  view: EditorView,
+  context: RenderContext,
+  occurrence: number,
+  inner: string,
+  declaration: DirectiveView,
+): PickOpener | undefined {
+  if (!context.picker || !readSpanDirectives(inner)) return undefined;
+  const elsewhere = repeatWrittenElsewhere(inner, declaration, context.options);
+
+  return (anchor) => {
+    const found = locateSpan(view, anchor, occurrence);
+    if (!found) return;
+    openLinePicker(anchor, found.inner, context.options, elsewhere, (written) =>
+      applyInEditor(view, anchor, occurrence, written),
+    );
+  };
+}
+
+function openLinePicker(
+  anchor: HTMLElement,
+  inner: string,
+  options: DisplayOptions,
+  elsewhere: string | undefined,
+  apply: (written: WrittenDirective) => void,
+): void {
+  const written = readSpanDirectives(inner);
+  if (!written) return;
+  openDirectivePicker({
+    anchor,
+    draft: readDraft(written, options),
+    options,
+    ...(elsewhere ? { lockedRepeat: `${elsewhere}, written elsewhere on this line` } : {}),
+    apply,
+  });
+}
+
+function repeatWrittenElsewhere(
+  inner: string,
+  declaration: DirectiveView,
+  options: DisplayOptions,
+): string | undefined {
+  if (readSpanDirectives(inner)?.repeat !== undefined) return undefined;
+  if (!declaration.event?.recurrence) return undefined;
+  return describeEvent(declaration.event, options).repeat;
+}
+
+interface SpanLocation {
+  from: number;
+  to: number;
+  inner: string;
+}
+
+/** Where the declaration sits now. Read again on apply, in case the note changed since. */
+function locateSpan(
+  view: EditorView,
+  anchor: HTMLElement,
+  occurrence: number,
+): SpanLocation | undefined {
+  const line = view.state.doc.lineAt(view.posAtDOM(anchor));
+  const found = findLineDirectives(line.text).find((span) => span.occurrence === occurrence);
+  if (!found) return undefined;
+  return {
+    from: line.from + found.innerFrom,
+    to: line.from + found.innerTo,
+    inner: line.text.slice(found.innerFrom, found.innerTo),
+  };
+}
+
+/** Edits through the editor, not the file, so one undo takes the change back. */
+function applyInEditor(
+  view: EditorView,
+  anchor: HTMLElement,
+  occurrence: number,
+  written: WrittenDirective,
+): void {
+  const found = locateSpan(view, anchor, occurrence);
+  const inner = found ? rewriteSpan(found.inner, toDirectiveSource(written)) : undefined;
+  if (!found || inner === undefined) {
+    new Notice(MOVED_NOTICE);
+    return;
+  }
+  if (inner === found.inner) return;
+  view.dispatch({ changes: { from: found.from, to: found.to, insert: inner } });
+}
+
+/** Builds the panel for a `gcal` entry in the note properties. */
+export function openEntryPicker(
+  anchor: HTMLElement,
+  path: string,
+  entryIndex: number,
+  source: DirectiveStatusSource,
+): void {
+  const entry = source.entrySource(path, entryIndex);
+  if (!entry) return;
+
+  const own: DirectiveSource = { ...entry };
+  if (entry.sharedRepeat) delete own.repeat;
+  const options = source.displayOptions();
+
+  openDirectivePicker({
+    anchor,
+    draft: readDraft(own, options),
+    options,
+    ...(entry.sharedRepeat && entry.repeat
+      ? { lockedRepeat: `${entry.repeat}, written for the whole note` }
+      : {}),
+    apply: (written) => {
+      void source.applyToEntry(path, entryIndex, written);
+    },
+  });
 }
 
 /**
@@ -233,7 +387,17 @@ function addFrontmatter(
     if (!declaration?.event) continue;
     if (!writesTheSameEvent(declaration.event, start.text, context.options)) continue;
     // A property value has no delimiters to leave behind, so the whole of it is the chip.
-    addDeclaration(ranges, context, declaration, { from, to, innerFrom: from, innerTo: to });
+    addDeclaration(ranges, context, declaration, {
+      from,
+      to,
+      innerFrom: from,
+      innerTo: to,
+      ...(context.picker
+        ? {
+            pick: (anchor: HTMLElement) => openEntryPicker(anchor, path, start.entryIndex, source),
+          }
+        : {}),
+    });
   }
 }
 
@@ -294,6 +458,7 @@ export function directiveStatusPostProcessor(source: DirectiveStatusSource): Mar
     if (placements.length !== spans.length) return;
 
     const chips = source.chipsEnabled();
+    const picker = source.pickerEnabled();
     const options = source.displayOptions();
 
     spans.forEach((span, index) => {
@@ -306,14 +471,34 @@ export function directiveStatusPostProcessor(source: DirectiveStatusSource): Mar
       );
       if (!declaration) return;
 
+      const inner = span.textContent ?? "";
+      const pick: PickOpener | undefined =
+        picker && readSpanDirectives(inner)
+          ? (anchor) =>
+              openLinePicker(
+                anchor,
+                inner,
+                options,
+                repeatWrittenElsewhere(inner, declaration, options),
+                (written) => {
+                  void source.applyToLine(
+                    context.sourcePath,
+                    placement.line,
+                    placement.occurrence,
+                    written,
+                  );
+                },
+              )
+          : undefined;
+
       const display =
         chips && declaration.event ? describeEvent(declaration.event, options) : undefined;
       if (!display) {
         span.addClass("gcal-directive", `gcal-directive-${declaration.status}`);
-        span.insertAdjacentElement("afterend", buildStatusMarker(declaration.status));
+        span.insertAdjacentElement("afterend", buildStatusMarker(declaration.status, pick));
         return;
       }
-      renderReadingChip(span, declaration.status, display);
+      renderReadingChip(span, declaration.status, display, pick);
     });
   };
 }
@@ -322,15 +507,19 @@ function renderReadingChip(
   span: HTMLElement,
   status: DirectiveStatus,
   display: EventDisplay,
+  pick: PickOpener | undefined,
 ): void {
   const holder = createSpan({ cls: "gcal-declaration" });
   span.replaceWith(holder);
 
-  const chip = buildChip(status, display, { focusable: true });
+  const chip = buildChip(status, display, { focusable: true, ...(pick ? { onPick: pick } : {}) });
   span.addClass("gcal-declaration-source");
   holder.append(chip, span);
 
-  const toggle = (): void => holder.toggleClass("is-open", !holder.hasClass("is-open"));
+  const toggle = (): void => {
+    closeDirectivePicker();
+    holder.toggleClass("is-open", !holder.hasClass("is-open"));
+  };
   chip.addEventListener("click", toggle);
   chip.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;

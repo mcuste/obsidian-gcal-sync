@@ -1,6 +1,6 @@
 import type { Component, Plugin } from "obsidian";
 import { buildChip, chipKey } from "./directive-chip";
-import type { DirectiveStatusSource } from "./directive-status";
+import { type DirectiveStatusSource, openEntryPicker } from "./directive-status";
 import { describeEvent, type EventDisplay } from "./event-display";
 import type { DirectiveStatus } from "./main";
 
@@ -85,10 +85,11 @@ export class FrontmatterPropertyChips {
       return;
     }
 
-    const key = chips.map(([status, display]) => chipKey(status, display)).join(" | ");
+    const pickable = this.source.pickerEnabled();
+    const key = chips.map(([status, display]) => chipKey(status, display, pickable)).join(" | ");
     if (holder?.dataset.gcalChips === key) return;
     holder?.remove();
-    this.attach(value, written, chips, key);
+    this.attach(value, written, chips, key, path);
   }
 
   /** Undefined unless every entry has an event, since a partial answer would hide the rest. */
@@ -114,12 +115,21 @@ export class FrontmatterPropertyChips {
     written: HTMLElement,
     chips: Array<[DirectiveStatus, EventDisplay]>,
     key: string,
+    path: string,
   ): void {
     const holder = createSpan({ cls: CHIPS });
     holder.dataset.gcalChips = key;
-    for (const [status, display] of chips) {
-      holder.append(buildChip(status, display, { focusable: true }));
-    }
+    const pickable = this.source.pickerEnabled();
+    chips.forEach(([status, display], index) => {
+      holder.append(
+        buildChip(status, display, {
+          focusable: true,
+          ...(pickable
+            ? { onPick: (anchor) => openEntryPicker(anchor, path, index, this.source) }
+            : {}),
+        }),
+      );
+    });
 
     written.addClass(SOURCE);
     written.insertAdjacentElement("beforebegin", holder);

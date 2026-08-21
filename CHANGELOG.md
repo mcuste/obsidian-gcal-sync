@@ -6,6 +6,23 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- Clicking the icon on a declaration opens a panel to pick its date, time, length, and repeat, rather
+  than typing the directive. It works on a chip in Live Preview and Reading view, on a `gcal` chip in
+  the properties widget, and on the marker beside a declaration shown as written, which is how a
+  declaration with a typo is fixed. The panel shows what it will write, in words and as text, before
+  you apply it.
+
+  Applying rewrites that one declaration and nothing else in the note. In Live Preview it goes through
+  the editor, so one undo takes it back. It leaves alone what it cannot own: a start that is not
+  written stays unwritten, a repeat that belongs to a whole line or note stays where it is, a UTC
+  offset is kept, and a rule it cannot phrase stays a text field. A code span holding two events, two
+  repeats, or an unknown directive gets no panel at all.
+
+  This is the only thing in the plugin that writes to a note. Sync itself still never does. The new
+  **Pick dates from a declaration** setting, on by default, removes the panel when turned off.
+
 ### Fixed
 
 - Changing a declaration from an all-day event to a timed one, or back, no longer breaks the sync.

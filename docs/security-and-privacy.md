@@ -44,6 +44,9 @@ The plugin cannot read your email, files, or contacts.
 Any note in a synced folder can create, change, or delete events on the selected calendar, using your
 Google authorization. Treat write access to those folders as write access to the calendar.
 
+The plugin writes to a note only when you press Apply in the date picker, and then only inside the
+declaration you opened. Turn **Pick dates from a declaration** off to remove that path entirely.
+
 If other people, synced devices, or automation can write to the vault, set **Synced folders** to the
 folders you control. Sync to a dedicated calendar rather than your main one, and keep **Change limit
 per sync** low enough that a bulk change stops for review. The other guard rails are in

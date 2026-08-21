@@ -31,6 +31,7 @@ Open **Settings → Google Calendar Sync**.
 | Setting | What it does |
 | --- | --- |
 | **Render declarations** | On by default. Draws each declaration as a chip with its date, time, and repeat in words, and the sync icon in front. Click a chip to get the text back. Off always shows the text. [What the chips say](event-syntax.md#how-a-declaration-is-shown). |
+| **Pick dates from a declaration** | On by default. Clicking the icon on a declaration opens a panel to choose the date, time, length, and repeat, and applying it rewrites that one declaration in your note. Off leaves every declaration read-only. [Picking a date](event-syntax.md#picking-a-date-instead-of-typing-one). |
 
 The tab ends with two reference sections rather than settings: **Event syntax** sums up
 [Event syntax](event-syntax.md), and **Trust model** repeats who can change your calendar, covered in

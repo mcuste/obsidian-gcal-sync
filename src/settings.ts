@@ -36,6 +36,8 @@ export interface GcalSyncSettings {
   maxChangesPerSync: number;
   /** Draws each declaration as a chip instead of leaving it as written. */
   renderDeclarations: boolean;
+  /** Lets the icon on a declaration open a picker that rewrites that declaration in the note. */
+  editDeclarations: boolean;
 }
 
 export function defaultSettings(vaultId: string): GcalSyncSettings {
@@ -51,6 +53,7 @@ export function defaultSettings(vaultId: string): GcalSyncSettings {
     syncFolders: [],
     maxChangesPerSync: DEFAULT_MAX_CHANGES_PER_SYNC,
     renderDeclarations: true,
+    editDeclarations: true,
   };
 }
 
@@ -121,6 +124,8 @@ export class GcalSettingTab extends PluginSettingTab {
         return settings.maxChangesPerSync;
       case "renderDeclarations":
         return settings.renderDeclarations;
+      case "editDeclarations":
+        return settings.editDeclarations;
       default:
         return undefined;
     }
@@ -144,13 +149,18 @@ export class GcalSettingTab extends PluginSettingTab {
       case "renderDeclarations":
         settings.renderDeclarations = Boolean(value);
         break;
+      case "editDeclarations":
+        settings.editDeclarations = Boolean(value);
+        break;
       default:
         return;
     }
 
     await this.plugin.saveSettings();
     if (key === "syncIntervalMinutes") this.plugin.resetPeriodicSync();
-    if (key === "renderDeclarations") this.plugin.refreshDeclarations();
+    if (key === "renderDeclarations" || key === "editDeclarations") {
+      this.plugin.refreshDeclarations();
+    }
   }
 
   private googleOAuthGroup(): SettingDefinitionGroup {
@@ -270,6 +280,17 @@ export class GcalSettingTab extends PluginSettingTab {
           control: {
             type: "toggle",
             key: "renderDeclarations",
+          },
+        },
+        {
+          name: "Pick dates from a declaration",
+          desc:
+            "Clicking the icon on a declaration opens a panel to choose the date, time, length, and " +
+            "repeat. Applying it rewrites that one declaration in your note; nothing else about the " +
+            "note is touched, and sync itself never writes to your notes.",
+          control: {
+            type: "toggle",
+            key: "editDeclarations",
           },
         },
       ],

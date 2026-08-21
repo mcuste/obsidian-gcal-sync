@@ -227,7 +227,8 @@ function readSharedRepeat(options: ParseFileOptions, result: ParseResult): strin
   return readEntryField(options.frontmatter?.["gcal-repeat"]);
 }
 
-function toEntryArray(value: unknown): unknown[] {
+/** The `gcal` property as a list of entries, whichever shape the note used. */
+export function toEntryArray(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   if (typeof value === "string") return value.trim() === "" ? [] : [value];
   if (typeof value === "object" && value !== null) return [value];
@@ -454,7 +455,7 @@ function assertValidWallClock(value: string): void {
 }
 
 /** Today's calendar date in the given time zone, which a bare time is measured against. */
-function currentDate(timeZone: string, now: Date): string {
+export function currentDate(timeZone: string, now: Date): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",

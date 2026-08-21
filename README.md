@@ -32,7 +32,8 @@ your notes ──> plugin compares ──> Google Calendar
                                    └─ line gone        -> delete
 ```
 
-- Sync goes one way. The plugin never edits your notes.
+- Sync goes one way. Nothing but the picker below ever writes to a note, and only the one
+  declaration you opened.
 - It runs about a second after you save, every 15 minutes, when Obsidian starts, and when you run
   **Sync now**.
 - It only touches events it created, so your other Google Calendar events are safe, even on the
@@ -40,8 +41,18 @@ your notes ──> plugin compares ──> Google Calendar
 
 A declaration you are not editing becomes a chip with the date, the time, and the repeat in words,
 led by an icon: a green tick means the event reached Google, a grey clock means not yet, a red cross
-means something is wrong. Click a chip to get the text back and edit it. See
-[how a declaration is shown](docs/event-syntax.md#how-a-declaration-is-shown).
+means something is wrong.
+
+<img alt="Five bullets in a note, each ending in a green chip reading its date, time, and repeat" src="docs/images/note-chips.png" width="700">
+
+Click a chip to get the text back and edit it, or click its **icon** and pick instead of typing:
+
+<img alt="The picker open under a chip, with rows for the event kind, start, length, and repeat, and weekday buttons" src="docs/images/declaration-picker.png" width="420">
+
+Apply rewrites that one declaration in your note and nothing else. The panel shows what it will
+write, in words and as the text, so you can also use it to learn the syntax.
+[Picking a date](docs/event-syntax.md#picking-a-date-instead-of-typing-one) has the details, and
+[how a declaration is shown](docs/event-syntax.md#how-a-declaration-is-shown) covers the chips.
 
 ## Syntax
 

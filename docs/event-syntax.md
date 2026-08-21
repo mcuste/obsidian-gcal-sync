@@ -202,7 +202,8 @@ led by an icon showing whether it reached Google:
 > - [ ] Design review  &nbsp;`✅ Tue 18 Aug, 14:00–15:00 · ↻ Mon–Fri`
 
 Click a chip to get the text back and edit it. In Live Preview the cursor lands in the declaration
-and the chip returns when you move away. In Reading view clicking swaps between the two.
+and the chip returns when you move away. In Reading view clicking swaps between the two. Clicking the
+**icon** opens the picker instead, covered below.
 
 The text still shows while the cursor is inside it, and when the declaration could not be read, so a
 typo shows you the typo. Turn **Render declarations** off to always see the text.
@@ -246,6 +247,48 @@ field, which already reads well and can be edited.
 
 A note syncs all or nothing, which is why one bad line shows a cross on itself and a minus on the
 others instead of marking the whole note as broken.
+
+## Picking a date instead of typing one
+
+Click the icon at the front of a chip, or the icon beside a declaration shown as written, and a panel
+opens under it:
+
+| Row | What it sets |
+| --- | --- |
+| **Event** | All day, or timed. |
+| **Starts** | The date, and the time when the event is timed. |
+| **Lasts** | Hours and minutes for a timed event, or a number of days for an all-day one. |
+| **Repeats** | Does not repeat, one of the six periods, chosen weekdays, every few units, or the rule as written. |
+| **On** | Which weekdays, when **Repeats** is set to chosen weekdays. |
+| **Every** | How many days, weeks, months, or years, when **Repeats** is set to every few. |
+| **Rule** | The rule itself, for a rule the panel has no control for, such as one with an `UNTIL`. |
+
+Above the buttons it shows what you have picked, in words and as the text it will write. **Apply**
+writes it, **Cancel** and Escape close without writing, and Enter in a field applies. Turn
+**Pick dates from a declaration** off in the settings to make every declaration read-only again.
+
+Applying rewrites that one declaration and touches nothing else in the note. In Live Preview the edit
+goes through the editor, so a single undo takes it back. Everywhere else the note is written directly.
+
+Some things the panel deliberately leaves alone:
+
+- **A start that is not written.** ``- [ ] Take medication `gcal-repeat:daily` `` has no date, and
+  after the first sync its date is the one on Google. So the panel shows today and says the date is
+  not in the note, and applying leaves it out until you pick a date yourself. The same holds for a
+  bare time such as `gcal:16:00`, which keeps its bare form until you set a date.
+- **A repeat written somewhere else.** A repeat that applies to a whole line or a whole note is shown
+  greyed out. Applying leaves it where it is, rather than giving this one declaration a copy of it.
+- **A UTC offset.** `gcal:2026-08-18T14:00-04:00` keeps its `-04:00`, and the date and time you pick
+  are read in that offset.
+- **A rule it cannot phrase.** `FREQ=WEEKLY;UNTIL=20261231` stays a text field, so opening the panel
+  cannot quietly simplify a rule.
+
+The icon has no panel at all when the code span holds something the panel could not put back without
+guessing: two events, two repeats, or a directive this version does not know.
+
+A `gcal` entry in the note properties gets the same panel from its chip. Applying rewrites that
+entry's `when` and `repeat` and leaves its `title` alone. Obsidian writes the properties block, so it
+comes back in Obsidian's own YAML formatting.
 
 ## Limits
 

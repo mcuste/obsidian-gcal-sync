@@ -7,6 +7,9 @@ import {
   TFile,
 } from "obsidian";
 import { confirmReconciliation } from "./confirm-modal";
+import { toDirectiveSource, type WrittenDirective } from "./directive-draft";
+import { closeDirectivePicker } from "./directive-picker";
+import { rewriteDocument } from "./directive-span";
 import {
   type DirectiveView,
   directiveStatusExtension,
@@ -19,6 +22,7 @@ import {
   parseVaultEvents,
   type VaultCalendarEvent,
 } from "./event-parser";
+import { type EntrySource, readEntrySource, writeEntrySource } from "./frontmatter-entry";
 import { FrontmatterPropertyChips } from "./frontmatter-properties";
 import {
   DEFAULT_MAX_CHANGES_PER_SYNC,
@@ -38,6 +42,7 @@ import {
 } from "./settings";
 
 const CHANGE_DEBOUNCE_MS = 1_000;
+const DECLARATION_MOVED = "That declaration moved, so nothing was changed";
 const MAX_REPORTED_ISSUES = 5;
 
 /**
@@ -161,6 +166,7 @@ export default class GcalSyncPlugin extends Plugin {
       this.timers.setTimeout(redraw, 0);
     }).load();
 
+    this.register(closeDirectivePicker);
     this.resetPeriodicSync();
     this.app.workspace.onLayoutReady(() => void this.syncNow(false));
   }
@@ -208,6 +214,63 @@ export default class GcalSyncPlugin extends Plugin {
 
   chipsEnabled(): boolean {
     return this.settings.renderDeclarations;
+  }
+
+  pickerEnabled(): boolean {
+    return this.settings.editDeclarations;
+  }
+
+  entrySource(path: string, entryIndex: number): EntrySource | undefined {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return undefined;
+    return readEntrySource(this.app.metadataCache.getFileCache(file)?.frontmatter, entryIndex);
+  }
+
+  /** Read and written in one step, so a note changed in between is reported, not overwritten. */
+  async applyToLine(
+    path: string,
+    line: number,
+    occurrence: number,
+    written: WrittenDirective,
+  ): Promise<void> {
+    const source = toDirectiveSource(written);
+    await this.editNote(path, async (file) => {
+      await this.app.vault.process(file, (data) => {
+        const next = rewriteDocument(data, line, occurrence, source);
+        if (next === undefined) throw new Error(DECLARATION_MOVED);
+        return next;
+      });
+    });
+  }
+
+  /** Changes only the entry's `when` and `repeat`, leaving its title and other fields. */
+  async applyToEntry(path: string, entryIndex: number, written: WrittenDirective): Promise<void> {
+    await this.editNote(path, async (file) => {
+      let found = false;
+      await this.app.fileManager.processFrontMatter(
+        file,
+        (frontmatter: Record<string, unknown>) => {
+          found = writeEntrySource(frontmatter, entryIndex, {
+            when: written.when,
+            ...(written.repeat === undefined ? {} : { repeat: written.repeat }),
+          });
+        },
+      );
+      if (!found) throw new Error(DECLARATION_MOVED);
+    });
+  }
+
+  private async editNote(path: string, edit: (file: TFile) => Promise<void>): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) {
+      new Notice(DECLARATION_MOVED);
+      return;
+    }
+    try {
+      await edit(file);
+    } catch (error) {
+      new Notice(errorMessage(error), 10_000);
+    }
   }
 
   /**

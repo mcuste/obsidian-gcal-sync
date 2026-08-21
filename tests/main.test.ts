@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { App, PluginManifest } from "obsidian";
+import type { App, CachedMetadata, PluginManifest } from "obsidian";
 import { TFile } from "obsidian";
 import { makeRemoteSourceKey, type VaultCalendarEvent } from "../src/event-parser";
 import type {
@@ -85,6 +85,19 @@ class TestVault extends TestEmitter {
     const content = this.files.get(file.path)?.content;
     if (content === undefined) throw new Error(`Expected content for ${file.path}`);
     return content;
+  }
+
+  /** Stands in for Obsidian's read-modify-write, which the picker uses to edit notes. */
+  async process(file: TFile, edit: (data: string) => string): Promise<string> {
+    const entry = this.files.get(file.path);
+    if (!entry) throw new Error(`Expected content for ${file.path}`);
+    const content = edit(entry.content);
+    this.files.set(file.path, { file: entry.file, content });
+    return content;
+  }
+
+  content(path: string): string | undefined {
+    return this.files.get(path)?.content;
   }
 }
 
@@ -381,18 +394,31 @@ function setup(
   workspace: TestWorkspace;
   timers: TestTimers;
   vaultIds: string[];
+  frontmatter: Map<string, Record<string, unknown>>;
 } {
   const vault = new TestVault();
   const workspace = new TestWorkspace();
   const timers = new TestTimers();
+  const frontmatter = new Map<string, Record<string, unknown>>();
   const metadataCache = new TestEmitter() as TestEmitter & {
-    getFileCache(file: TFile): null;
+    getFileCache(file: TFile): CachedMetadata | null;
   };
-  metadataCache.getFileCache = () => null;
+  metadataCache.getFileCache = (file) => {
+    const properties = frontmatter.get(file.path);
+    return properties ? { frontmatter: properties } : null;
+  };
+  const fileManager = {
+    async processFrontMatter(file: TFile, edit: (properties: Record<string, unknown>) => void) {
+      const properties = frontmatter.get(file.path) ?? {};
+      edit(properties);
+      frontmatter.set(file.path, properties);
+    },
+  };
   const app = {
     vault,
     workspace,
     metadataCache,
+    fileManager,
     secretStorage: {
       getSecret(id: string) {
         return id === "client-id-secret" ? "client-id" : "refresh-token";
@@ -417,7 +443,7 @@ function setup(
     vaultId: VAULT_ID,
     ...storedSettings,
   });
-  return { plugin, vault, workspace, timers, vaultIds };
+  return { plugin, vault, workspace, timers, vaultIds, frontmatter };
 }
 
 test("full lifecycle scan creates, updates, and deletes managed events", async () => {
@@ -676,5 +702,120 @@ test("a vault ID stored by an earlier release is replaced by the one the name gi
 
   assert.deepEqual(vaultIds, [VAULT_ID]);
   assert.deepEqual(sourceKeys(gateway), [["Notes.md::line-1-1", "Standup", "created-1"]]);
+  plugin.onunload();
+});
+
+test("the picker rewrites the inline declaration it was opened on", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault, workspace } = setup(gateway);
+  vault.set("Plan.md", "Standup `gcal:09:00` Retro `gcal:2026-08-18T11:00 gcal-repeat:weekly`");
+
+  await plugin.onload();
+  workspace.ready();
+  await gateway.waitForCompleted(1);
+
+  await plugin.applyToLine("Plan.md", 0, 2, {
+    when: "2026-08-19T15:30/PT45M",
+    repeat: "weekdays",
+    whenImplied: false,
+  });
+
+  assert.equal(
+    vault.content("Plan.md"),
+    "Standup `gcal:09:00` Retro `gcal:2026-08-19T15:30/PT45M gcal-repeat:weekdays`",
+  );
+  plugin.onunload();
+});
+
+test("the picker drops a repeat the declaration no longer has", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault, workspace } = setup(gateway);
+  vault.set("Plan.md", "Rent `gcal:2026-09-01 gcal-repeat:monthly`");
+
+  await plugin.onload();
+  workspace.ready();
+  await gateway.waitForCompleted(1);
+
+  await plugin.applyToLine("Plan.md", 0, 1, { when: "2026-09-01", whenImplied: false });
+
+  assert.equal(vault.content("Plan.md"), "Rent `gcal:2026-09-01`");
+  plugin.onunload();
+});
+
+test("the picker leaves a repeat standing on its own alone", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault, workspace } = setup(gateway);
+  vault.set("Plan.md", "Medication `gcal-repeat:daily`");
+
+  await plugin.onload();
+  workspace.ready();
+  await gateway.waitForCompleted(1);
+
+  // The start is still today and unwritten, so writing it out would move the event.
+  await plugin.applyToLine("Plan.md", 0, 1, {
+    when: "2026-08-18",
+    repeat: "weekdays",
+    whenImplied: true,
+  });
+
+  assert.equal(vault.content("Plan.md"), "Medication `gcal-repeat:weekdays`");
+  plugin.onunload();
+});
+
+test("the picker leaves a note alone when the declaration moved", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault, workspace } = setup(gateway);
+  vault.set("Plan.md", "Standup `gcal:09:00`");
+
+  await plugin.onload();
+  workspace.ready();
+  await gateway.waitForCompleted(1);
+
+  await plugin.applyToLine("Plan.md", 4, 1, { when: "2026-08-18", whenImplied: false });
+
+  assert.equal(vault.content("Plan.md"), "Standup `gcal:09:00`");
+  plugin.onunload();
+});
+
+test("the picker rewrites one note-properties entry and keeps its title", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault, workspace, frontmatter } = setup(gateway);
+  vault.set("Standup.md", "---\ngcal:\n  - when: 09:15/PT15M\n    title: Standup\n---\n");
+  frontmatter.set("Standup.md", {
+    gcal: [{ when: "09:15/PT15M", title: "Standup" }, { when: "2026-08-20" }],
+  });
+
+  await plugin.onload();
+  workspace.ready();
+  await gateway.waitForCompleted(1);
+
+  await plugin.applyToEntry("Standup.md", 0, {
+    when: "09:30/PT30M",
+    repeat: "weekdays",
+    whenImplied: false,
+  });
+
+  assert.deepEqual(frontmatter.get("Standup.md"), {
+    gcal: [{ when: "09:30/PT30M", title: "Standup", repeat: "weekdays" }, { when: "2026-08-20" }],
+  });
+  plugin.onunload();
+});
+
+test("the picker reads a note-properties entry as written", async () => {
+  const gateway = new InMemoryGateway();
+  const { plugin, vault, workspace, frontmatter } = setup(gateway);
+  vault.set("Standup.md", "---\ngcal: 2026-08-18\ngcal-repeat: weekly\n---\n");
+  frontmatter.set("Standup.md", { gcal: "2026-08-18", "gcal-repeat": "weekly" });
+
+  await plugin.onload();
+  workspace.ready();
+  await gateway.waitForCompleted(1);
+
+  assert.deepEqual(plugin.entrySource("Standup.md", 0), {
+    when: "2026-08-18",
+    repeat: "weekly",
+    sharedRepeat: true,
+  });
+  assert.equal(plugin.entrySource("Standup.md", 1), undefined);
   plugin.onunload();
 });

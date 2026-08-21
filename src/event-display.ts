@@ -1,4 +1,10 @@
-import type { CalendarDateTime, VaultCalendarEvent } from "./event-parser";
+import type { DirectiveSource } from "./directive-draft";
+import {
+  type CalendarDateTime,
+  normalizeRecurrence,
+  parseSchedule,
+  type VaultCalendarEvent,
+} from "./event-parser";
 
 export interface EventDisplay {
   /** Such as "Tue 18 Aug, 14:00–15:00", or "Today". */
@@ -45,6 +51,28 @@ export function describeEvent(event: DisplayEvent, options: DisplayOptions): Eve
       : timedWhen(event, zone, today, once, options),
     ...(repeat ? { repeat } : {}),
   };
+}
+
+/**
+ * A declaration the picker is about to write, in the same words a chip uses. Empty when it cannot
+ * be read.
+ */
+export function describeDirective(source: DirectiveSource, options: DisplayOptions): string {
+  if (source.when === undefined) return "";
+  try {
+    const schedule = parseSchedule(source.when, options.timeZone, options.now);
+    const display = describeEvent(
+      {
+        start: schedule.start,
+        end: schedule.end,
+        ...(source.repeat ? { recurrence: [normalizeRecurrence(source.repeat)] } : {}),
+      },
+      options,
+    );
+    return display.repeat ? `${display.when} \u00b7 ${display.repeat}` : display.when;
+  } catch {
+    return "";
+  }
 }
 
 function allDayWhen(
@@ -188,7 +216,7 @@ function describeDays(byDay: string, locale?: string): string | undefined {
 }
 
 /** 2024-01-01 was a Monday, which is what makes index 0 Monday. */
-function weekdayName(index: number, locale?: string): string {
+export function weekdayName(index: number, locale?: string): string {
   return formatter(locale, { timeZone: "UTC", weekday: "short" }).format(
     new Date(Date.UTC(2024, 0, 1 + index)),
   );
